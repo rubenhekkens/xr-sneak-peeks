@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Holo Twin — a control room for a machine that isn't there</title>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#020608; font-family:"Segoe UI", system-ui, sans-serif; color:#bfeaf5; }
+  canvas.gl { display:block; }
+  #left { position:fixed; top:20px; left:20px; width:230px; display:flex; flex-direction:column; gap:12px; }
+  #right { position:fixed; top:20px; right:20px; width:250px; display:flex; flex-direction:column; gap:12px; }
+  .card { background:rgba(4,14,20,.8); border:1px solid rgba(64,220,255,.28); border-radius:10px; padding:12px 14px; backdrop-filter:blur(6px); transition:border-color .3s, box-shadow .3s; }
+  .card.alert { border-color:rgba(255,70,70,.8); box-shadow:0 0 18px rgba(255,60,60,.25); }
+  .card h3 { margin:0 0 2px; font-size:10px; letter-spacing:.18em; text-transform:uppercase; color:#5f93a6; }
+  .card .val { font-size:24px; font-weight:600; color:#40dcff; font-variant-numeric:tabular-nums; }
+  .card.alert .val { color:#ff6b5c; }
+  .card .unit { font-size:12px; color:#5f93a6; margin-left:4px; }
+  .card canvas { display:block; margin-top:6px; width:100%; height:44px; }
+  #status { font-size:13px; letter-spacing:.14em; text-transform:uppercase; font-weight:600; color:#3ee88a; }
+  #status.bad { color:#ff5c4a; animation:blink 1s infinite; }
+  @keyframes blink { 50% { opacity:.4; } }
+  #log { font-size:11px; line-height:1.7; color:#6da4b8; max-height:170px; overflow:hidden; font-variant-numeric:tabular-nums; }
+  #log .warn { color:#ffb454; }
+  #log .err { color:#ff6b5c; }
+  #log .ok { color:#3ee88a; }
+  button { background:rgba(255,90,70,.12); color:#ff8a75; border:1px solid rgba(255,90,70,.5); border-radius:8px;
+           padding:10px 14px; font-size:12px; letter-spacing:.12em; text-transform:uppercase; cursor:pointer; }
+  button:hover:not(:disabled) { background:rgba(255,90,70,.25); }
+  button:disabled { opacity:.35; cursor:default; }
+  #title { position:fixed; bottom:16px; left:0; right:0; text-align:center; font-size:11px; color:#3c6272; letter-spacing:.08em; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="left">
+  <div class="card" id="cardP"><h3>Vessel pressure</h3><span class="val" id="vP">–</span><span class="unit">Pa</span><canvas width="200" height="44"></canvas></div>
+  <div class="card" id="cardF"><h3>Purge flow</h3><span class="val" id="vF">–</span><span class="unit">slm</span><canvas width="200" height="44"></canvas></div>
+  <div class="card" id="cardT"><h3>Optic surface temp</h3><span class="val" id="vT">–</span><span class="unit">°C</span><canvas width="200" height="44"></canvas></div>
+</div>
+<div id="right">
+  <div class="card"><h3>System status</h3><div id="status">● Nominal</div></div>
+  <div class="card"><h3>Event log</h3><div id="log"></div></div>
+  <button id="inject">⚠ Inject anomaly</button>
+</div>
+<div id="title">HOLO TWIN · vacuum vessel VT-04 · drag to orbit · live telemetry is simulated</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.domElement.className = 'gl';
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+
+// hologram grade: scanlines + chromatic aberration + vignette + grain
+const GradeShader = {
+  uniforms: { tDiffuse:{value:null}, uTime:{value:0}, uAberration:{value:0.002}, uScan:{value:0.3} },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uTime; uniform float uAberration; uniform float uScan; varying vec2 vUv;
+    void main(){
+      vec2 d = (vUv - 0.5) * uAberration;
+      vec3 col;
+      col.r = texture2D(tDiffuse, vUv + d).r;
+      col.g = texture2D(tDiffuse, vUv).g;
+      col.b = texture2D(tDiffuse, vUv - d).b;
+      col *= 1.0 - uScan * 0.3 * (0.5 + 0.5 * sin(vUv.y * 750.0 + uTime * 12.0));
+      float vig = smoothstep(0.92, 0.3, distance(vUv, vec2(0.5)));
+      col *= 0.7 + 0.3 * vig;
+      col += (fract(sin(dot(vUv + fract(uTime)*0.1, vec2(12.9898,78.233)))*43758.5453) - 0.5) * 0.045;
+      gl_FragColor = vec4(col, 1.0);
+    }`
+};
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x020608);
+scene.fog = new THREE.FogExp2(0x020608, 0.03);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(5.2, 3.6, 9);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.target.set(0, 1.6, 0);
+controls.enableDamping = true;
+controls.maxDistance = 20;
+controls.minDistance = 3;
+
+const grid = new THREE.GridHelper(40, 40, 0x0d3340, 0x07202a);
+scene.add(grid);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.5, 0.6, 0.3));
+const gradePass = new ShaderPass(GradeShader);
+composer.addPass(gradePass);
+composer.addPass(new OutputPass());
+
+// ── hologram ────────────────────────────────────────────────
+const holo = new THREE.Group();
+holo.position.y = 1.7;
+scene.add(holo);
+
+const cyanLine = (o = 0.3) => new THREE.LineBasicMaterial({ color:0x40dcff, transparent:true, opacity:o });
+
+// vessel shell
+const vesselGeo = new THREE.CylinderGeometry(2, 2, 4.2, 36, 4, true);
+holo.add(new THREE.LineSegments(new THREE.WireframeGeometry(vesselGeo), cyanLine(0.16)));
+holo.add(new THREE.Mesh(vesselGeo, new THREE.MeshBasicMaterial({
+  color:0x40dcff, transparent:true, opacity:0.045, side:THREE.DoubleSide,
+  blending:THREE.AdditiveBlending, depthWrite:false })));
+for (const y of [-2.1, 0, 2.1]) {
+  const ring = new THREE.Mesh(new THREE.TorusGeometry(2.03, 0.045, 8, 64),
+    new THREE.MeshBasicMaterial({ color:0x40dcff, transparent:true, opacity:0.5 }));
+  ring.rotation.x = Math.PI/2;
+  ring.position.y = y;
+  holo.add(ring);
+}
+
+// mirrors + beam path
+const mirrorDefs = [
+  { pos:[0, -1.2, 0],  tilt: 0.5 },
+  { pos:[0.9, 0.2, 0], tilt:-0.45 },
+  { pos:[-0.6, 1.35, 0], tilt: 0.65 },
+];
+const mirrors = [];
+for (const md of mirrorDefs) {
+  const m = new THREE.Mesh(new THREE.CylinderGeometry(0.65, 0.65, 0.07, 32),
+    new THREE.MeshBasicMaterial({ color:0x9ef2ff, transparent:true, opacity:0.18 }));
+  m.position.set(...md.pos);
+  m.rotation.z = md.tilt;
+  holo.add(m);
+  const e = new THREE.LineSegments(new THREE.EdgesGeometry(m.geometry), cyanLine(0.8));
+  e.position.copy(m.position);
+  e.rotation.copy(m.rotation);
+  holo.add(e);
+  mirrors.push(m);
+}
+const beamPts = [new THREE.Vector3(0, -2.4, 0),
+  ...mirrorDefs.map(m => new THREE.Vector3(...m.pos)),
+  new THREE.Vector3(0, 2.4, 0)];
+const beamCurve = new THREE.CurvePath();
+for (let i = 0; i < beamPts.length - 1; i++)
+  beamCurve.add(new THREE.LineCurve3(beamPts[i], beamPts[i+1]));
+const beamMat = new THREE.MeshBasicMaterial({ color:0xff5cf0, transparent:true, opacity:0.75,
+  blending:THREE.AdditiveBlending, depthWrite:false });
+holo.add(new THREE.Mesh(new THREE.TubeGeometry(beamCurve, 60, 0.035, 8, false), beamMat));
+
+// drifting gas particles
+const GAS = 700;
+const gasPos = new Float32Array(GAS * 3);
+function gasSpawn(i, randomY) {
+  const a = Math.random()*Math.PI*2, r = Math.sqrt(Math.random())*1.85;
+  gasPos[i*3] = Math.cos(a)*r;
+  gasPos[i*3+1] = randomY ? (Math.random()*4 - 2) : -2;
+  gasPos[i*3+2] = Math.sin(a)*r;
+}
+for (let i = 0; i < GAS; i++) gasSpawn(i, true);
+const gasGeo = new THREE.BufferGeometry();
+gasGeo.setAttribute('position', new THREE.BufferAttribute(gasPos, 3));
+const gas = new THREE.Points(gasGeo, new THREE.PointsMaterial({ color:0x40dcff, size:0.05,
+  transparent:true, opacity:0.35, blending:THREE.AdditiveBlending, depthWrite:false }));
+gas.frustumCulled = false;
+holo.add(gas);
+
+// scan ring sweeping the vessel
+const scanRing = new THREE.Mesh(new THREE.TorusGeometry(2.02, 0.025, 8, 64),
+  new THREE.MeshBasicMaterial({ color:0x9ef2ff, transparent:true, opacity:0.7,
+    blending:THREE.AdditiveBlending, depthWrite:false }));
+scanRing.rotation.x = Math.PI/2;
+holo.add(scanRing);
+
+// radar sweep plane rotating inside the vessel
+const sweepCanvas = document.createElement('canvas');
+sweepCanvas.width = 256; sweepCanvas.height = 32;
+{
+  const c = sweepCanvas.getContext('2d');
+  const g = c.createLinearGradient(0, 0, 256, 0);
+  g.addColorStop(0, 'rgba(64,220,255,0.55)');
+  g.addColorStop(0.25, 'rgba(64,220,255,0.12)');
+  g.addColorStop(1, 'rgba(64,220,255,0)');
+  c.fillStyle = g; c.fillRect(0, 0, 256, 32);
+}
+const sweepGeo = new THREE.PlaneGeometry(1.95, 4.1);
+sweepGeo.translate(0.975, 0, 0);
+const sweep = new THREE.Mesh(sweepGeo, new THREE.MeshBasicMaterial({
+  map:new THREE.CanvasTexture(sweepCanvas), transparent:true, side:THREE.DoubleSide,
+  blending:THREE.AdditiveBlending, depthWrite:false }));
+holo.add(sweep);
+
+// hotspot (hidden until anomaly)
+const hotspot = new THREE.Mesh(new THREE.SphereGeometry(0.14, 16, 12),
+  new THREE.MeshBasicMaterial({ color:0xff3b2a, transparent:true, opacity:0.9 }));
+hotspot.position.copy(mirrors[1].position);
+hotspot.visible = false;
+holo.add(hotspot);
+
+// drop-in upgrade: if assets/vessel.glb exists (Tripo-generated machine), it becomes
+// the hologram — fresnel-shaded ghost shell replacing the hand-built cylinder
+new GLTFLoader().load('assets/vessel.glb', g => {
+  const model = g.scene;
+  const size = new THREE.Box3().setFromObject(model).getSize(new THREE.Vector3());
+  model.scale.setScalar(4.6 / Math.max(size.x, size.y, size.z));
+  model.updateMatrixWorld(true);
+  const c = new THREE.Box3().setFromObject(model).getCenter(new THREE.Vector3());
+  model.position.sub(c);
+
+  const fresnel = new THREE.ShaderMaterial({
+    uniforms: { uColor: { value: new THREE.Color(0x40dcff) } },
+    vertexShader: `varying vec3 vN; varying vec3 vV;
+      void main(){
+        vec4 wp = modelMatrix * vec4(position, 1.0);
+        vN = normalize(mat3(modelMatrix) * normal);
+        vV = normalize(cameraPosition - wp.xyz);
+        gl_Position = projectionMatrix * viewMatrix * wp;
+      }`,
+    fragmentShader: `uniform vec3 uColor; varying vec3 vN; varying vec3 vV;
+      void main(){
+        float f = pow(1.0 - abs(dot(normalize(vN), normalize(vV))), 2.0);
+        gl_FragColor = vec4(uColor * (0.25 + 1.3 * f), 0.08 + 0.9 * f);
+      }`,
+    transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, side:THREE.DoubleSide });
+
+  let tris = 0;
+  model.traverse(o => {
+    if (o.isMesh) tris += (o.geometry.index ? o.geometry.index.count : o.geometry.attributes.position.count) / 3;
+  });
+  model.traverse(o => {
+    if (!o.isMesh) return;
+    o.material = fresnel;
+    if (tris < 80000)   // edge overlay only if the mesh is light enough
+      o.add(new THREE.LineSegments(new THREE.EdgesGeometry(o.geometry, 30), cyanLine(0.2)));
+  });
+
+  // retire the hand-built vessel; keep gas, scan ring, sweep, hotspot and beam
+  const keep = new Set([gas, scanRing, sweep, hotspot]);
+  for (const obj of holo.children.filter(o => !keep.has(o) && o.material !== beamMat)) holo.remove(obj);
+  holo.add(model);
+  window.__vessel = { tris: Math.round(tris), children: holo.children.length };
+}, undefined, () => { /* no vessel.glb yet — keep the procedural vessel */ });
+
+// pedestal
+const ped = new THREE.Mesh(new THREE.CylinderGeometry(2.6, 2.9, 0.22, 48),
+  new THREE.MeshBasicMaterial({ color:0x0a2a36 }));
+ped.position.y = -0.4;
+scene.add(ped);
+const pedRing = new THREE.Mesh(new THREE.TorusGeometry(2.6, 0.03, 8, 64),
+  new THREE.MeshBasicMaterial({ color:0x40dcff, transparent:true, opacity:0.7 }));
+pedRing.rotation.x = Math.PI/2;
+pedRing.position.y = -0.28;
+scene.add(pedRing);
+
+// ── telemetry model ─────────────────────────────────────────
+const metrics = {
+  P: { el:document.getElementById('vP'), card:document.getElementById('cardP'), data:[], min:4.4, max:7.2, dec:2 },
+  F: { el:document.getElementById('vF'), card:document.getElementById('cardF'), data:[], min:60, max:140, dec:0 },
+  T: { el:document.getElementById('vT'), card:document.getElementById('cardT'), data:[], min:21, max:33, dec:1 },
+};
+for (const k in metrics) metrics[k].ctx = metrics[k].card.querySelector('canvas').getContext('2d');
+
+const statusEl = document.getElementById('status');
+const logEl = document.getElementById('log');
+const injectBtn = document.getElementById('inject');
+
+function log(msg, cls = '') {
+  const d = new Date();
+  const ts = d.toTimeString().slice(0, 8);
+  const line = document.createElement('div');
+  if (cls) line.className = cls;
+  line.textContent = ts + '  ' + msg;
+  logEl.prepend(line);
+  while (logEl.children.length > 8) logEl.removeChild(logEl.lastChild);
+}
+log('Telemetry link established', 'ok');
+log('Vessel VT-04 twin synchronised', 'ok');
+
+let anomalyT = -1;                 // seconds since injection, -1 = off
+const ANOM_DUR = 12;
+const fired = new Set();
+injectBtn.addEventListener('click', () => {
+  anomalyT = 0;
+  fired.clear();
+  injectBtn.disabled = true;
+});
+
+function sparkline(m) {
+  const c = m.ctx, w = 200, h = 44;
+  c.clearRect(0, 0, w, h);
+  c.strokeStyle = m.card.classList.contains('alert') ? '#ff6b5c' : '#40dcff';
+  c.lineWidth = 1.5;
+  c.beginPath();
+  const n = m.data.length;
+  for (let i = 0; i < n; i++) {
+    const x = i / 139 * w;
+    const y = h - 3 - (m.data[i] - m.min) / (m.max - m.min) * (h - 8);
+    i ? c.lineTo(x, y) : c.moveTo(x, y);
+  }
+  c.stroke();
+}
+
+const clock = new THREE.Clock();
+let frame = 0;
+const bgCalm = new THREE.Color(0x020608), bgAlert = new THREE.Color(0x1a0507);
+
+function animate() {
+  requestAnimationFrame(animate);
+  const dt = Math.min(clock.getDelta(), 0.05);
+  const t = clock.elapsedTime;
+  frame++;
+
+  // ── anomaly envelope ──
+  let flowDip = 0, tempRise = 0, pJitter = 0;
+  if (anomalyT >= 0) {
+    anomalyT += dt;
+    const ph = anomalyT / ANOM_DUR;
+    if (ph >= 1) {
+      anomalyT = -1;
+      hotspot.visible = false;
+      injectBtn.disabled = false;
+      statusEl.textContent = '● Nominal';
+      statusEl.classList.remove('bad');
+      log('Recovered — all channels nominal', 'ok');
+      for (const k in metrics) metrics[k].card.classList.remove('alert');
+    } else {
+      flowDip = Math.sin(Math.PI * Math.min(1, ph * 1.6)) * 45;
+      tempRise = Math.sin(Math.PI * Math.min(1, ph * 1.1)) * 8.5;
+      pJitter = Math.sin(Math.PI * ph) * 0.6;
+      hotspot.visible = true;
+      hotspot.scale.setScalar(1 + 0.4 * Math.sin(t * 9));
+      hotspot.material.opacity = 0.6 + 0.4 * Math.sin(t * 9);
+      if (!fired.has(0)) { fired.add(0);
+        log('Purge flow dropout detected on line B', 'err');
+        statusEl.textContent = '⚠ Anomaly — contamination risk';
+        statusEl.classList.add('bad');
+        metrics.F.card.classList.add('alert');
+      }
+      if (ph > 0.18 && !fired.has(1)) { fired.add(1);
+        log('Optic M2 surface temp rising', 'warn');
+        metrics.T.card.classList.add('alert');
+      }
+      if (ph > 0.45 && !fired.has(2)) { fired.add(2);
+        log('Backup purge line engaged', 'warn');
+      }
+      if (ph > 0.75 && !fired.has(3)) { fired.add(3);
+        log('Flow restored — temp decaying', 'ok');
+        metrics.F.card.classList.remove('alert');
+      }
+    }
+  }
+
+  // ── telemetry values ──
+  const P = 5.2 + 0.06*Math.sin(t*0.9) + (Math.random()-0.5)*0.03 + pJitter*Math.sin(t*13);
+  const F = 118 + 3*Math.sin(t*0.5) + (Math.random()-0.5)*1.5 - flowDip;
+  const T = 22.4 + 0.15*Math.sin(t*0.3) + (Math.random()-0.5)*0.06 + tempRise;
+
+  if (frame % 3 === 0) {
+    const vals = { P, F, T };
+    for (const k in metrics) {
+      const m = metrics[k];
+      m.data.push(vals[k]);
+      if (m.data.length > 140) m.data.shift();
+      m.el.textContent = vals[k].toFixed(m.dec);
+      sparkline(m);
+    }
+  }
+
+  // ── hologram life ──
+  holo.rotation.y += 0.12 * dt;
+  beamMat.opacity = 0.55 + 0.3 * Math.sin(t * 4);
+  scanRing.position.y = ((t * 0.9) % 4.6) - 2.3;
+  scanRing.material.opacity = 0.7 * Math.sin(Math.PI * (((t * 0.9) % 4.6) / 4.6));
+  sweep.rotation.y = -t * 0.85;
+  // holographic imperfection: occasional one-frame dropouts and jitter
+  holo.visible = Math.random() > 0.012;
+  holo.position.x = Math.random() < 0.02 ? (Math.random() - 0.5) * 0.06 : 0;
+  // ambience shifts red while the anomaly is live
+  scene.background.lerp(anomalyT >= 0 ? bgAlert : bgCalm, 0.04);
+  scene.fog.color.copy(scene.background);
+  gradePass.uniforms.uAberration.value += ((anomalyT >= 0 ? 0.0055 : 0.002) - gradePass.uniforms.uAberration.value) * 0.06;
+  const rise = anomalyT >= 0 ? 0.25 : 0.55;   // gas slows when purge drops
+  for (let i = 0; i < GAS; i++) {
+    gasPos[i*3+1] += rise * dt * (0.6 + (i % 5) * 0.2);
+    if (gasPos[i*3+1] > 2) gasSpawn(i, false);
+  }
+  gasGeo.attributes.position.needsUpdate = true;
+
+  controls.update();
+  gradePass.uniforms.uTime.value = t;
+  composer.render();
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

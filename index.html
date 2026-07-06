@@ -1,0 +1,87 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>XR Sneak Peeks — five demo directions</title>
+<meta property="og:title" content="XR Sneak Peeks — five real-time 3D demos" />
+<meta property="og:description" content="Gas-curtain physics sandbox, real drill teardown, powers-of-ten silicon dive, beat-reactive terrain, holographic digital twin. Single-file three.js, AI-generated models." />
+<meta name="description" content="Five single-file three.js demos: particle physics sandbox, FBX teardown, powers-of-ten zoom, audio-reactive terrain, holographic digital twin." />
+<style>
+  :root { --bg:#07090e; --card:#0d1119; --line:rgba(255,255,255,.08); --dim:#8b94a3; }
+  html, body { margin:0; background:var(--bg); color:#e6ebf2; font-family:"Segoe UI", system-ui, sans-serif; }
+  .wrap { max-width:1080px; margin:0 auto; padding:56px 28px 80px; }
+  h1 { font-size:30px; margin:0 0 6px; letter-spacing:.02em; }
+  .sub { color:var(--dim); font-size:14px; margin:0 0 40px; max-width:640px; line-height:1.6; }
+  .grid { display:grid; grid-template-columns:repeat(auto-fit, minmax(300px, 1fr)); gap:18px; }
+  a.card { display:block; background:var(--card); border:1px solid var(--line); border-radius:14px;
+           padding:22px 24px; text-decoration:none; color:inherit; transition:transform .15s, border-color .15s; }
+  a.card:hover { transform:translateY(-3px); border-color:var(--accent); }
+  .num { font-size:12px; font-weight:600; color:var(--accent); letter-spacing:.2em; }
+  h2 { font-size:19px; margin:8px 0 8px; color:var(--accent); }
+  .card p { font-size:13px; color:var(--dim); line-height:1.6; margin:0 0 14px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; }
+  .chip { font-size:10px; letter-spacing:.08em; text-transform:uppercase; color:var(--dim);
+          border:1px solid var(--line); border-radius:20px; padding:3px 10px; }
+  .foot { margin-top:44px; color:#525c6b; font-size:12px; line-height:1.8; }
+  code { background:#141a24; padding:1px 6px; border-radius:4px; font-size:11px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>XR Sneak Peeks</h1>
+  <p class="sub">Five demo directions distilled from your projects — jarvis, digitaltwin,
+     explodeddrillassembly, chipvisualizer, powersoften and musicvisualizer.
+     Each is a single self-contained HTML file. <b style="color:#c9d4e4">v2 — cinematic pass:</b>
+     ACES film grading, bloom, grain &amp; chromatic aberration on every demo, plus a running
+     machine, beat detection, holographic glitches and more. Try them all, pick one to take further.</p>
+  <div class="grid">
+    <a class="card" href="1-gas-curtain.html" style="--accent:#4fd8ff">
+      <div class="num">SNEAK PEEK 01</div>
+      <h2>Ghost Flow</h2>
+      <p>A live, interactive gas-purge curtain: a contaminant plume attacks an optic and you
+         command the jet that protects it — protection efficiency computed in real time.
+         Full version: your Noether surrogate running live behind the sliders, in VR.</p>
+      <div class="chips"><span class="chip">digitaltwin</span><span class="chip">jarvis</span><span class="chip">20k particles</span></div>
+    </a>
+    <a class="card" href="2-exploded-machine.html" style="--accent:#ffb454">
+      <div class="num">SNEAK PEEK 02</div>
+      <h2>Teardown</h2>
+      <p>Your real drill assembly — the 14-part Tripo FBX from your Unity project with its full
+         PBR texture sets — loaded live, exploding and reassembling under HDRI lighting.
+         Full version: grab parts with Quest hand tracking.</p>
+      <div class="chips"><span class="chip">explodeddrillassembly</span><span class="chip">real FBX + PBR</span><span class="chip">HDRI</span></div>
+    </a>
+    <a class="card" href="3-powers-of-chip.html" style="--accent:#8ab4ff">
+      <div class="num">SNEAK PEEK 03</div>
+      <h2>Silicon Dive</h2>
+      <p>Powers of Ten, but into a chip: one continuous scroll from motherboard to package,
+         die, interconnect, FinFET, and finally the silicon lattice itself — ten orders of
+         magnitude. Full version: the dive happens around you in VR, narrated.</p>
+      <div class="chips"><span class="chip">powersoften</span><span class="chip">chipvisualizer</span></div>
+    </a>
+    <a class="card" href="4-terrainwave.html" style="--accent:#ff6ec7">
+      <div class="num">SNEAK PEEK 04</div>
+      <h2>Terrainwave</h2>
+      <p>Your music carved into a mountain range you fly through — drop in an MP3 (Tame
+         Impala works) or use the built-in synth track. Full version: a VR world whose
+         geometry, weather and colour are the song.</p>
+      <div class="chips"><span class="chip">musicvisualizer</span><span class="chip">webaudio</span></div>
+    </a>
+    <a class="card" href="5-machine-twin.html" style="--accent:#40dcff">
+      <div class="num">SNEAK PEEK 05</div>
+      <h2>Holo Twin</h2>
+      <p>A Jarvis-style holographic control room for a vacuum vessel: live telemetry,
+         sparklines, an event log — and an anomaly you can inject and watch propagate through
+         the hologram. Full version: driven by real sensor data, standing on your desk in AR.</p>
+      <div class="chips"><span class="chip">jarvis</span><span class="chip">digitaltwin</span><span class="chip">telemetry</span></div>
+    </a>
+  </div>
+  <p class="foot">
+    All demos load three.js from a CDN, so you need internet. If a page stays black when opened
+    via <code>file://</code>, serve the folder instead: <code>python -m http.server 8090</code>
+    in <code>xr-sneak-peeks</code>, then open <code>http://localhost:8090</code>.
+  </p>
+</div>
+</body>
+</html>

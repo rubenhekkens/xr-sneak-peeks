@@ -1,0 +1,392 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Silicon Dive — motherboard to atom in one scroll</title>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#0d1117; font-family:"Segoe UI", system-ui, sans-serif; color:#d8dee6; }
+  canvas { display:block; }
+  #hud { position:fixed; top:22px; left:0; right:0; text-align:center; pointer-events:none; }
+  #scale { font-size:34px; font-weight:600; color:#8ab4ff; letter-spacing:.04em; font-variant-numeric:tabular-nums; }
+  #stage { font-size:13px; letter-spacing:.22em; text-transform:uppercase; color:#7d8a9c; margin-top:6px; transition:opacity .22s; }
+  #bar { position:fixed; right:26px; top:50%; transform:translateY(-50%); width:3px; height:46vh; background:rgba(255,255,255,.1); border-radius:2px; }
+  #dot { position:absolute; left:50%; transform:translate(-50%,-50%); width:11px; height:11px; border-radius:50%; background:#8ab4ff; box-shadow:0 0 12px #8ab4ff; }
+  #foot { position:fixed; bottom:16px; left:0; right:0; text-align:center; font-size:11px; color:#525c6b; letter-spacing:.06em; }
+  #dive { position:fixed; top:24px; left:24px; background:rgba(13,17,24,.8); color:#8ab4ff; border:1px solid rgba(138,180,255,.4);
+          border-radius:8px; padding:8px 16px; font-size:12px; letter-spacing:.12em; text-transform:uppercase; cursor:pointer; }
+  #dive:hover { background:rgba(138,180,255,.15); }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="hud">
+  <div id="scale">1 m</div>
+  <div id="stage">THE MOTHERBOARD</div>
+</div>
+<button id="dive">▶ auto dive</button>
+<div id="bar"><div id="dot"></div></div>
+<div id="foot">scroll to dive from the motherboard to a single silicon atom — 10 orders of magnitude</div>
+<script type="module">
+import * as THREE from 'three';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+
+const GradeShader = {
+  uniforms: { tDiffuse:{value:null}, uTime:{value:0}, uAberration:{value:0.0018} },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uTime; uniform float uAberration; varying vec2 vUv;
+    void main(){
+      vec2 d = (vUv - 0.5) * uAberration;
+      vec3 col;
+      col.r = texture2D(tDiffuse, vUv + d).r;
+      col.g = texture2D(tDiffuse, vUv).g;
+      col.b = texture2D(tDiffuse, vUv - d).b;
+      float vig = smoothstep(0.92, 0.3, distance(vUv, vec2(0.5)));
+      col *= 0.7 + 0.3 * vig;
+      col += (fract(sin(dot(vUv + fract(uTime)*0.1, vec2(12.9898,78.233)))*43758.5453) - 0.5) * 0.045;
+      gl_FragColor = vec4(col, 1.0);
+    }`
+};
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0d1117);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.01, 5000);
+camera.position.set(0, 2.6, 7.5);
+
+scene.add(new THREE.AmbientLight(0x556070, 1.6));
+const key = new THREE.DirectionalLight(0xffffff, 1.8);
+key.position.set(3, 6, 4);
+scene.add(key);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.45, 0.55, 0.4));
+const gradePass = new ShaderPass(GradeShader);
+composer.addPass(gradePass);
+composer.addPass(new OutputPass());
+
+// Every layer is centered on the origin and ~3 units across at scale 1.
+// Layer at native exponent E is rendered with scale 10^(E - e) for current e.
+const layers = [];   // { group, E, mats:[], label }
+function layer(E, label, build) {
+  const group = new THREE.Group();
+  const mats = [];
+  const track = (m, baseOpacity = 1) => { m.transparent = true; m.userData = { baseOpacity }; mats.push(m); return m; };
+  build(group, track);
+  // ambient dust motes — parallax depth cue at every scale
+  {
+    const n = 90, p = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      p[i*3] = (Math.random()-0.5)*9;
+      p[i*3+1] = (Math.random()-0.5)*6;
+      p[i*3+2] = (Math.random()-0.5)*9;
+    }
+    const dg = new THREE.BufferGeometry();
+    dg.setAttribute('position', new THREE.BufferAttribute(p, 3));
+    group.add(new THREE.Points(dg, track(new THREE.PointsMaterial({
+      color:0x86a8ff, size:0.05, blending:THREE.AdditiveBlending, depthWrite:false }), 0.5)));
+  }
+  scene.add(group);
+  layers.push({ group, E, mats, label });
+}
+
+// ── 10^0 : motherboard ──────────────────────────────────────
+layer(0, 'The motherboard', (g, track) => {
+  const board = new THREE.Mesh(new THREE.BoxGeometry(7, 0.12, 5),
+    track(new THREE.MeshStandardMaterial({ color:0x0f3d2a, roughness:0.85 })));
+  g.add(board);
+  const pkg = new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.16, 1.3),
+    track(new THREE.MeshStandardMaterial({ color:0x14181f, roughness:0.4, metalness:0.3 })));
+  pkg.position.y = 0.14;
+  g.add(pkg);
+  const capMat = track(new THREE.MeshStandardMaterial({ color:0x8a8f96, metalness:0.8, roughness:0.4 }));
+  for (let i = 0; i < 26; i++) {
+    const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.14, 10), capMat);
+    let x, z;
+    do { x = (Math.random()-0.5)*6.2; z = (Math.random()-0.5)*4.2; } while (Math.abs(x) < 1.1 && Math.abs(z) < 1.1);
+    cap.position.set(x, 0.13, z);
+    g.add(cap);
+  }
+  // gold traces converging on the package
+  const pts = [];
+  for (let i = 0; i < 60; i++) {
+    const a = Math.random()*Math.PI*2;
+    const x0 = Math.cos(a)*(0.9+Math.random()*0.2), z0 = Math.sin(a)*(0.9+Math.random()*0.2);
+    const x1 = x0*(2.2+Math.random()*1.4), z1 = z0*(1.7+Math.random()*1.2);
+    pts.push(x0, 0.075, z0,  x1, 0.075, Math.abs(z1) > 2.4 ? Math.sign(z1)*2.4 : z1);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
+  g.add(new THREE.LineSegments(geo, track(new THREE.LineBasicMaterial({ color:0xc8a24a }), 0.45)));
+});
+
+// ── 10^-1.5 : the package ───────────────────────────────────
+layer(-1.5, 'The chip package', (g, track) => {
+  const sub = new THREE.Mesh(new THREE.BoxGeometry(3.4, 0.22, 3.4),
+    track(new THREE.MeshStandardMaterial({ color:0x1c4030, roughness:0.6 })));
+  g.add(sub);
+  const die = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.09, 1.5),
+    track(new THREE.MeshStandardMaterial({ color:0x1a2438, metalness:0.85, roughness:0.15, emissive:0x101a30, emissiveIntensity:0.6 })));
+  die.position.y = 0.16;
+  g.add(die);
+  // gold bond wires
+  const wireMat = track(new THREE.LineBasicMaterial({ color:0xe0b45a }), 0.8);
+  for (let i = 0; i < 44; i++) {
+    const side = i % 4, k = (Math.floor(i/4)/10 - 0.5) * 1.3;
+    const dirs = [[1,0],[-1,0],[0,1],[0,-1]][side];
+    const p0 = new THREE.Vector3(dirs[0]*0.74 + dirs[1]*0, 0.2, dirs[1]*0.74 + dirs[0]*k*0 + (side<2 ? k : 0));
+    if (side >= 2) p0.set(k, 0.2, dirs[1]*0.74);
+    const p2 = p0.clone().multiplyScalar(1.9); p2.y = 0.12;
+    const p1 = p0.clone().lerp(p2, 0.5); p1.y = 0.55;
+    const curve = new THREE.QuadraticBezierCurve3(p0, p1, p2);
+    const geo = new THREE.BufferGeometry().setFromPoints(curve.getPoints(14));
+    g.add(new THREE.Line(geo, wireMat));
+  }
+  const pinMat = track(new THREE.MeshStandardMaterial({ color:0xb0b6bd, metalness:0.9, roughness:0.3 }));
+  for (let i = 0; i < 36; i++) {
+    const side = i % 4, k = (Math.floor(i/4)/8 - 0.5) * 3.0;
+    const pin = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.08, 0.1), pinMat);
+    if (side === 0) pin.position.set(1.78, -0.05, k);
+    if (side === 1) pin.position.set(-1.78, -0.05, k);
+    if (side === 2) { pin.position.set(k, -0.05, 1.78); pin.rotation.y = Math.PI/2; }
+    if (side === 3) { pin.position.set(k, -0.05, -1.78); pin.rotation.y = Math.PI/2; }
+    g.add(pin);
+  }
+});
+
+// ── 10^-3.5 : the die floorplan ─────────────────────────────
+layer(-3.5, 'The die — a city of 20 billion transistors', (g, track) => {
+  const base = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.1, 4.4),
+    track(new THREE.MeshStandardMaterial({ color:0x0a0e18, roughness:0.5 })));
+  g.add(base);
+  const palette = [0x2255cc, 0x22aacc, 0x8844cc, 0xcc8822, 0x22cc88];
+  let seed = 7;
+  const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
+  for (let gx = 0; gx < 6; gx++) for (let gz = 0; gz < 6; gz++) {
+    const w = 0.55 + rnd()*0.12, d = 0.55 + rnd()*0.12, h = 0.05 + rnd()*0.08;
+    const col = palette[Math.floor(rnd()*palette.length)];
+    const b = new THREE.Mesh(new THREE.BoxGeometry(w, h, d),
+      track(new THREE.MeshStandardMaterial({ color:col, emissive:col, emissiveIntensity:0.5, roughness:0.4 })));
+    b.position.set((gx-2.5)*0.7, 0.08 + h/2, (gz-2.5)*0.7);
+    g.add(b);
+  }
+  // glowing bus lines
+  const pts = [];
+  for (let i = -2; i <= 2; i++) { pts.push(-2.2, 0.16, i*0.7+0.35, 2.2, 0.16, i*0.7+0.35); pts.push(i*0.7+0.35, 0.16, -2.2, i*0.7+0.35, 0.16, 2.2); }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(pts), 3));
+  g.add(new THREE.LineSegments(geo, track(new THREE.LineBasicMaterial({ color:0x4488ff }), 0.55)));
+});
+
+// ── 10^-6 : the interconnect stack ──────────────────────────
+layer(-6, 'The interconnect — copper highways, 15 layers deep', (g, track) => {
+  const copper = track(new THREE.MeshStandardMaterial({ color:0xc26a3a, metalness:0.9, roughness:0.3, emissive:0x662200, emissiveIntensity:0.25 }));
+  const viaMat = track(new THREE.MeshStandardMaterial({ color:0x8a4a2a, metalness:0.9, roughness:0.4 }));
+  let seed = 13;
+  const rnd = () => (seed = (seed*16807) % 2147483647) / 2147483647;
+  for (let level = 0; level < 5; level++) {
+    const y = level * 0.5 - 1;
+    const alongX = level % 2 === 0;
+    const width = 0.09 + level*0.05;
+    for (let i = 0; i < 8; i++) {
+      const off = (i - 3.5) * (0.42 + level*0.06);
+      const len = 2.4 + rnd()*1.4;
+      const bar = new THREE.Mesh(new THREE.BoxGeometry(alongX ? len : width, 0.12 + level*0.04, alongX ? width : len), copper);
+      bar.position.set(alongX ? (rnd()-0.5)*0.8 : off, y, alongX ? off : (rnd()-0.5)*0.8);
+      g.add(bar);
+      if (level < 4 && rnd() > 0.45) {
+        const via = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.5, 8), viaMat);
+        via.position.set(alongX ? (rnd()-0.5)*2 : off, y + 0.25, alongX ? off : (rnd()-0.5)*2);
+        g.add(via);
+      }
+    }
+  }
+});
+
+// ── 10^-7.5 : the FinFET ────────────────────────────────────
+layer(-7.5, 'The transistor — a FinFET, ~10 nanometres', (g, track) => {
+  const sub = new THREE.Mesh(new THREE.BoxGeometry(4, 0.5, 4),
+    track(new THREE.MeshStandardMaterial({ color:0x2a2f3a, roughness:0.6 })));
+  sub.position.y = -0.5;
+  g.add(sub);
+  const finMat = track(new THREE.MeshStandardMaterial({ color:0x3a4a66, metalness:0.3, roughness:0.35, emissive:0x16233a, emissiveIntensity:0.7 }));
+  for (let i = 0; i < 5; i++) {
+    const fin = new THREE.Mesh(new THREE.BoxGeometry(0.18, 0.7, 3.4), finMat);
+    fin.position.set((i-2)*0.55, 0.1, 0);
+    g.add(fin);
+  }
+  const gate = new THREE.Mesh(new THREE.BoxGeometry(3.2, 1.0, 0.7),
+    track(new THREE.MeshStandardMaterial({ color:0xb8bcc4, metalness:0.95, roughness:0.2 })));
+  gate.position.y = 0.15;
+  g.add(gate);
+  const chanMat = track(new THREE.MeshBasicMaterial({ color:0x66ccff }), 0.9);
+  for (let i = 0; i < 5; i++) {
+    const glow = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.74, 0.74), chanMat);
+    glow.position.set((i-2)*0.55, 0.12, 0);
+    g.add(glow);
+  }
+});
+
+// ── 10^-9.3 : the silicon lattice ───────────────────────────
+let electron = null, trailGeo = null;
+layer(-9.3, 'The silicon lattice — one atom every quarter nanometre', (g, track) => {
+  const a = 1.15;                                   // lattice constant (display units)
+  const basis = [[0,0,0],[0,.5,.5],[.5,0,.5],[.5,.5,0],[.25,.25,.25],[.25,.75,.75],[.75,.25,.75],[.75,.75,.25]];
+  const positions = [];
+  for (let cx = -1; cx <= 1; cx++) for (let cy = -1; cy <= 1; cy++) for (let cz = -1; cz <= 1; cz++)
+    for (const b of basis)
+      positions.push(new THREE.Vector3((cx + b[0])*a, (cy + b[1])*a, (cz + b[2])*a));
+  const atomGeo = new THREE.SphereGeometry(0.13, 14, 10);
+  const atomMat = track(new THREE.MeshStandardMaterial({ color:0x7d8fb0, metalness:0.2, roughness:0.35, emissive:0x223350, emissiveIntensity:0.3 }));
+  const inst = new THREE.InstancedMesh(atomGeo, atomMat, positions.length);
+  const m4 = new THREE.Matrix4();
+  positions.forEach((p, i) => inst.setMatrixAt(i, m4.makeTranslation(p.x, p.y, p.z)));
+  g.add(inst);
+  // covalent bonds = nearest-neighbour pairs at a·√3/4
+  const bondLen = a * Math.sqrt(3)/4 + 0.05;
+  const bondPts = [];
+  for (let i = 0; i < positions.length; i++)
+    for (let j = i+1; j < positions.length; j++)
+      if (positions[i].distanceTo(positions[j]) < bondLen)
+        bondPts.push(positions[i].x, positions[i].y, positions[i].z, positions[j].x, positions[j].y, positions[j].z);
+  const bondGeo = new THREE.BufferGeometry();
+  bondGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(bondPts), 3));
+  g.add(new THREE.LineSegments(bondGeo, track(new THREE.LineBasicMaterial({ color:0x4a6088 }), 0.5)));
+  electron = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 8),
+    track(new THREE.MeshBasicMaterial({ color:0x9ff4ff })));
+  g.add(electron);
+  trailGeo = new THREE.BufferGeometry();
+  trailGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(40 * 3), 3));
+  g.add(new THREE.Line(trailGeo, track(new THREE.LineBasicMaterial({ color:0x66eaff }), 0.7)));
+});
+
+// ── zoom state ──────────────────────────────────────────────
+const E_MAX = 0.15, E_MIN = -10.2;
+let e = E_MAX, eTarget = E_MAX, autoDive = false;
+
+addEventListener('wheel', ev => {
+  ev.preventDefault();
+  autoDive = false; diveBtn.textContent = '▶ auto dive';
+  eTarget = Math.max(E_MIN, Math.min(E_MAX, eTarget - ev.deltaY * 0.0022));
+}, { passive:false });
+
+let touchY = null;
+addEventListener('touchstart', ev => touchY = ev.touches[0].clientY);
+addEventListener('touchmove', ev => {
+  const y = ev.touches[0].clientY;
+  eTarget = Math.max(E_MIN, Math.min(E_MAX, eTarget + (y - touchY) * 0.012));
+  touchY = y;
+});
+
+const diveBtn = document.getElementById('dive');
+diveBtn.addEventListener('click', () => {
+  autoDive = !autoDive;
+  if (autoDive && eTarget < E_MIN + 0.3) eTarget = E_MAX;   // restart from top
+  diveBtn.textContent = autoDive ? '❚❚ pause' : '▶ auto dive';
+});
+
+// mouse parallax
+const par = { x:0, y:0 };
+addEventListener('pointermove', ev => {
+  par.x = (ev.clientX/innerWidth - 0.5) * 2;
+  par.y = (ev.clientY/innerHeight - 0.5) * 2;
+});
+
+// HUD formatting
+const scaleEl = document.getElementById('scale');
+const stageEl = document.getElementById('stage');
+const dot = document.getElementById('dot');
+const units = { 0:'m', '-3':'mm', '-6':'µm', '-9':'nm', '-12':'pm' };
+function fmtScale(exp) {
+  const uExp = Math.max(-12, 3 * Math.floor(exp/3 + 1e-6));
+  const val = Math.pow(10, exp - uExp);
+  const digits = val < 10 ? 1 : 0;
+  return val.toFixed(digits) + ' ' + units[String(uExp)];
+}
+
+const bgTop = new THREE.Color(0x0d1117), bgDeep = new THREE.Color(0x02020a);
+const clock = new THREE.Clock();
+let lastLabel = '', stageTimer = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  if (autoDive) {
+    eTarget -= 0.4 * Math.min(clock.getDelta() + 0.016, 0.05);
+    if (eTarget <= E_MIN) { eTarget = E_MIN; autoDive = false; diveBtn.textContent = '▶ auto dive'; }
+  }
+  e += (eTarget - e) * 0.07;
+
+  let best = layers[0], bestD = 1e9;
+  for (const L of layers) {
+    const l = L.E - e;                    // log10 of apparent scale
+    const s = Math.pow(10, l);
+    const alpha = Math.max(0, Math.min(1, Math.min((l + 2.1)/0.9, (1.7 - l)/0.6)));
+    L.group.visible = alpha > 0.003;
+    if (L.group.visible) {
+      L.group.scale.setScalar(s);
+      L.group.rotation.y = t * 0.06;
+      for (const m of L.mats) m.opacity = alpha * m.userData.baseOpacity;
+    }
+    const d = Math.abs(e - L.E);
+    if (d < bestD) { bestD = d; best = L; }
+  }
+
+  if (electron) {
+    electron.position.set(Math.sin(t*2.1)*1.4, Math.sin(t*1.3)*1.1, Math.cos(t*1.7)*1.4);
+    const tp = trailGeo.attributes.position.array;
+    tp.copyWithin(3, 0, 39 * 3);
+    tp[0] = electron.position.x; tp[1] = electron.position.y; tp[2] = electron.position.z;
+    trailGeo.attributes.position.needsUpdate = true;
+  }
+
+  scaleEl.textContent = fmtScale(e);
+  if (best.label !== lastLabel) {
+    lastLabel = best.label;
+    stageEl.style.opacity = 0;
+    clearTimeout(stageTimer);
+    stageTimer = setTimeout(() => { stageEl.textContent = lastLabel.toUpperCase(); stageEl.style.opacity = 1; }, 200);
+  }
+  dot.style.top = ((E_MAX - e) / (E_MAX - E_MIN) * 100) + '%';
+
+  scene.background.copy(bgTop).lerp(bgDeep, (E_MAX - e) / (E_MAX - E_MIN));
+
+  camera.position.x += (par.x * 1.4 - camera.position.x) * 0.04;
+  camera.position.y += (2.2 - par.y * 1.2 - camera.position.y) * 0.04;
+  camera.lookAt(0, 0, 0);
+
+  gradePass.uniforms.uTime.value = t;
+  composer.render();
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

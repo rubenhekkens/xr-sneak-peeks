@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Teardown — every part knows where home is</title>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#0b0e13; font-family:"Segoe UI", system-ui, sans-serif; color:#d8dee6; }
+  canvas { display:block; }
+  #hud { position:fixed; top:0; left:0; right:0; padding:18px 24px; display:flex; justify-content:space-between; align-items:flex-start; pointer-events:none; }
+  .panel { background:rgba(13,17,24,.78); border:1px solid rgba(255,255,255,.09); border-radius:10px; padding:14px 18px; pointer-events:auto; backdrop-filter:blur(6px); }
+  h1 { margin:0 0 4px; font-size:15px; letter-spacing:.14em; text-transform:uppercase; color:#ffb454; }
+  p { margin:0; font-size:12px; color:#8b94a3; max-width:330px; line-height:1.5; }
+  label { font-size:11px; letter-spacing:.1em; text-transform:uppercase; color:#8b94a3; display:block; margin:12px 0 6px; }
+  input[type=range] { width:240px; accent-color:#ffb454; }
+  .chk { font-size:12px; color:#8b94a3; margin-top:8px; display:flex; gap:6px; align-items:center; }
+  #tag { position:fixed; pointer-events:none; background:rgba(20,24,32,.92); border:1px solid rgba(255,180,84,.5);
+         color:#ffb454; font-size:12px; letter-spacing:.06em; padding:5px 10px; border-radius:6px; display:none; transform:translate(14px, -50%); }
+  #foot { position:fixed; bottom:14px; left:0; right:0; text-align:center; font-size:11px; color:#525c6b; letter-spacing:.06em; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="hud">
+  <div class="panel">
+    <h1>Teardown</h1>
+    <p>Your actual drill assembly — the FBX straight out of your Unity project,
+       loaded live in the browser. Pull it apart with the slider; hover a part
+       to name it.</p>
+    <label>Explode</label>
+    <input id="explode" type="range" min="0" max="100" value="0" />
+    <div class="chk"><input id="auto" type="checkbox" /><span>breathe (auto explode/assemble)</span></div>
+    <div id="loadStatus" style="margin-top:10px;font-size:11px;color:#6b7688">loading your drill model…</div>
+  </div>
+</div>
+<div id="tag"></div>
+<div id="foot">drag to orbit · scroll to zoom · hover parts for names</div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import { RGBELoader } from 'three/addons/loaders/RGBELoader.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+
+const GradeShader = {
+  uniforms: { tDiffuse:{value:null}, uTime:{value:0}, uAberration:{value:0.0012} },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uTime; uniform float uAberration; varying vec2 vUv;
+    void main(){
+      vec2 d = (vUv - 0.5) * uAberration;
+      vec3 col;
+      col.r = texture2D(tDiffuse, vUv + d).r;
+      col.g = texture2D(tDiffuse, vUv).g;
+      col.b = texture2D(tDiffuse, vUv - d).b;
+      float vig = smoothstep(0.92, 0.3, distance(vUv, vec2(0.5)));
+      col *= 0.72 + 0.28 * vig;
+      col += (fract(sin(dot(vUv + fract(uTime)*0.1, vec2(12.9898,78.233)))*43758.5453) - 0.5) * 0.04;
+      gl_FragColor = vec4(col, 1.0);
+    }`
+};
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0b0e13);
+scene.fog = new THREE.FogExp2(0x0b0e13, 0.028);
+const pmrem = new THREE.PMREMGenerator(renderer);
+scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+scene.environmentIntensity = 0.5;
+// real HDRI replaces the synthetic room as soon as it arrives
+new RGBELoader().load(
+  'https://cdn.jsdelivr.net/npm/three@0.160.0/examples/textures/equirectangular/royal_esplanade_1k.hdr',
+  hdr => { hdr.mapping = THREE.EquirectangularReflectionMapping; scene.environment = hdr; });
+
+const floor = new THREE.GridHelper(50, 50, 0x2a3444, 0x141a26);
+floor.position.y = -3.6;
+scene.add(floor);
+
+const camera = new THREE.PerspectiveCamera(50, innerWidth/innerHeight, 0.1, 100);
+camera.position.set(9, 5.5, 12);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.autoRotate = true;
+controls.autoRotateSpeed = 0.5;
+controls.maxDistance = 30;
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.4, 0.5, 0.4));
+const gradePass = new ShaderPass(GradeShader);
+composer.addPass(gradePass);
+composer.addPass(new OutputPass());
+
+scene.add(new THREE.AmbientLight(0x50565f, 2.0));
+const key = new THREE.DirectionalLight(0xffffff, 2.4);
+key.position.set(5, 8, 4);
+scene.add(key);
+const fill = new THREE.DirectionalLight(0xaabbdd, 1.2);
+fill.position.set(-5, 2, 7);
+scene.add(fill);
+const rimL = new THREE.DirectionalLight(0x6688ff, 1.0);
+rimL.position.set(-6, -3, -6);
+scene.add(rimL);
+
+// ── materials ────────────────────────────────────────────────
+const M = {
+  steel:  new THREE.MeshStandardMaterial({ color:0x9aa4ad, metalness:0.85, roughness:0.35 }),
+  dark:   new THREE.MeshStandardMaterial({ color:0x3a4048, metalness:0.7,  roughness:0.5 }),
+  brass:  new THREE.MeshStandardMaterial({ color:0xc8a24a, metalness:0.9,  roughness:0.3 }),
+  shell:  new THREE.MeshStandardMaterial({ color:0x1f5f66, metalness:0.4,  roughness:0.45, side:THREE.DoubleSide }),
+  orange: new THREE.MeshStandardMaterial({ color:0xd96a1f, metalness:0.6,  roughness:0.4 }),
+};
+// clone so highlights don't bleed between parts
+const mat = (m) => m.clone();
+
+// ── part registry ────────────────────────────────────────────
+const root = new THREE.Group();
+scene.add(root);
+const parts = [];
+// order: 0 = leaves first when exploding, 1 = leaves last
+// spin:  rad/s of shaft rotation while the machine is assembled and running
+function addPart(obj, name, dir, dist, opts = {}) {
+  obj.userData.part = { name, base: obj.position.clone(), dir: dir.clone().normalize(), dist,
+    order: opts.order ?? 0.5, spin: opts.spin ?? 0, unscrew: opts.unscrew ?? false };
+  obj.traverse(o => { o.userData.owner = obj; });
+  parts.push(obj);
+  root.add(obj);
+}
+
+function gear(radius, thickness, teeth, material) {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(radius, radius, thickness, 32), material);
+  body.rotation.z = Math.PI/2;               // axis along x
+  g.add(body);
+  for (let i = 0; i < teeth; i++) {
+    const a = i / teeth * Math.PI * 2;
+    const tooth = new THREE.Mesh(new THREE.BoxGeometry(thickness*0.96, radius*0.28, radius*0.22), material);
+    tooth.position.set(0, Math.cos(a)*(radius+radius*0.1), Math.sin(a)*(radius+radius*0.1));
+    tooth.rotation.x = -a;
+    g.add(tooth);
+  }
+  const hub = new THREE.Mesh(new THREE.CylinderGeometry(radius*0.3, radius*0.3, thickness*1.6, 20), material);
+  hub.rotation.z = Math.PI/2;
+  g.add(hub);
+  return g;
+}
+
+// drive shaft
+const shaft = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.2, 6.6, 24), mat(M.steel));
+shaft.rotation.z = Math.PI/2;
+const shaftGroup = new THREE.Group(); shaftGroup.add(shaft);
+addPart(shaftGroup, 'Drive shaft', new THREE.Vector3(1, 0.15, 0), 0.6, { order: 1, spin: 6 });
+
+// chuck
+const chuck = new THREE.Group();
+const c1 = new THREE.Mesh(new THREE.CylinderGeometry(0.75, 0.5, 1.2, 24), mat(M.dark)); c1.rotation.z = Math.PI/2;
+const c2 = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.55, 0.5, 24), mat(M.steel)); c2.rotation.z = Math.PI/2; c2.position.x = 0.8;
+chuck.add(c1, c2);
+chuck.position.set(3.7, 0, 0);
+addPart(chuck, 'Chuck', new THREE.Vector3(1, 0, 0), 2.4, { order: 0.35, spin: 6 });
+
+// planetary gearbox at x = -1
+const sun = gear(0.45, 0.35, 8, mat(M.brass));
+sun.position.set(-1, 0, 0);
+addPart(sun, 'Sun gear', new THREE.Vector3(0, 1, 0.25), 1.6, { order: 0.9, spin: 6 });
+for (let i = 0; i < 3; i++) {
+  const a = i / 3 * Math.PI * 2 + 0.4;
+  const p = gear(0.42, 0.32, 8, mat(M.steel));
+  p.position.set(-1, Math.cos(a)*0.95, Math.sin(a)*0.95);
+  addPart(p, 'Planet gear ' + (i+1), new THREE.Vector3(0, Math.cos(a), Math.sin(a)), 2.2, { order: 0.85, spin: -8 });
+}
+const ring = new THREE.Mesh(new THREE.TorusGeometry(1.45, 0.28, 14, 48), mat(M.dark));
+ring.rotation.y = Math.PI/2;
+const ringGroup = new THREE.Group(); ringGroup.add(ring); ringGroup.position.set(-1, 0, 0);
+addPart(ringGroup, 'Ring gear', new THREE.Vector3(-1, 0, 0), 2.6, { order: 0.7 });
+
+// bearings
+[[-2.6, -1, 1.7], [2.5, 1, 1.5]].forEach(([x, s, d], i) => {
+  const b = new THREE.Mesh(new THREE.TorusGeometry(0.55, 0.15, 12, 32), mat(M.steel));
+  b.rotation.y = Math.PI/2;
+  const g = new THREE.Group(); g.add(b); g.position.set(x, 0, 0);
+  addPart(g, 'Ball bearing', new THREE.Vector3(s, s*0.3, 0), d, { order: 0.6 });
+});
+
+// impeller (motor end)
+const imp = new THREE.Group();
+const hub2 = new THREE.Mesh(new THREE.CylinderGeometry(0.35, 0.35, 0.5, 20), mat(M.orange));
+hub2.rotation.z = Math.PI/2;
+imp.add(hub2);
+for (let i = 0; i < 8; i++) {
+  const a = i / 8 * Math.PI * 2;
+  const blade = new THREE.Mesh(new THREE.BoxGeometry(0.1, 1.0, 0.42), mat(M.orange));
+  blade.position.set(0, Math.cos(a)*0.75, Math.sin(a)*0.75);
+  blade.rotation.x = -a;
+  blade.rotation.y = 0.5;
+  imp.add(blade);
+}
+imp.position.set(-3.3, 0, 0);
+addPart(imp, 'Cooling impeller', new THREE.Vector3(-1, 0, 0), 4.0, { order: 0.35, spin: 6 });
+
+// housing shells
+function shell(thetaStart, name, dir) {
+  const geo = new THREE.CylinderGeometry(1.75, 1.75, 5.4, 32, 1, true, thetaStart, Math.PI);
+  const m = new THREE.Mesh(geo, mat(M.shell));
+  const g = new THREE.Group();
+  m.rotation.z = Math.PI/2;   // axis along x
+  g.add(m);
+  addPart(g, name, dir, 2.8, { order: 0.45 });
+}
+shell(0, 'Housing shell (rear)',  new THREE.Vector3(0, 0, 1));
+shell(Math.PI, 'Housing shell (front)', new THREE.Vector3(0, 0, -1));
+
+// end caps + screws
+[[-3.05, -1, 'Motor end cap'], [3.0, 1, 'Nose cap']].forEach(([x, s, name]) => {
+  const cap = new THREE.Mesh(new THREE.CylinderGeometry(1.75, 1.75, 0.32, 32), mat(M.brass));
+  cap.rotation.z = Math.PI/2;
+  const g = new THREE.Group(); g.add(cap); g.position.set(x, 0, 0);
+  addPart(g, name, new THREE.Vector3(s, 0, 0), 3.6, { order: 0.18 });
+  for (let i = 0; i < 4; i++) {
+    const a = i / 4 * Math.PI * 2 + Math.PI/4;
+    const sc = new THREE.Group();
+    const body = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 0.5, 10), mat(M.steel));
+    const head = new THREE.Mesh(new THREE.CylinderGeometry(0.13, 0.13, 0.1, 12), mat(M.steel));
+    body.rotation.z = Math.PI/2; head.rotation.z = Math.PI/2;
+    head.position.x = s * 0.3;
+    sc.add(body, head);
+    sc.position.set(x + s*0.25, Math.cos(a)*1.3, Math.sin(a)*1.3);
+    addPart(sc, 'M4 screw', new THREE.Vector3(s, 0, 0), 4.6 + i*0.35, { order: 0, unscrew: true });
+  }
+});
+
+// assembly guide lines — appear as the machine opens up
+const guideMat = new THREE.LineBasicMaterial({ color:0xffb454, transparent:true, opacity:0 });
+let guideLines = null;
+function buildGuides() {
+  if (guideLines) { root.remove(guideLines); guideLines.geometry.dispose(); }
+  const guidePts = [];
+  for (const p of parts) {
+    const d = p.userData.part;
+    if (d.dist < 0.1) continue;
+    const e = d.base.clone().addScaledVector(d.dir, d.dist);
+    guidePts.push(d.base.x, d.base.y, d.base.z, e.x, e.y, e.z);
+  }
+  const guideGeo = new THREE.BufferGeometry();
+  guideGeo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(guidePts), 3));
+  guideLines = new THREE.LineSegments(guideGeo, guideMat);
+  root.add(guideLines);
+}
+buildGuides();
+
+// ── the real thing: the drill assembly FBX from the Unity project ──
+// (the procedural gearbox above stays as the instant fallback)
+const statusEl = document.getElementById('loadStatus');
+new FBXLoader().load('assets/drill.fbx', fbx => {
+  // orient longest axis along x, normalise size, centre on origin
+  const s0 = new THREE.Box3().setFromObject(fbx).getSize(new THREE.Vector3());
+  if (s0.y >= s0.x && s0.y >= s0.z) fbx.rotation.z = -Math.PI/2;
+  else if (s0.z >= s0.x && s0.z >= s0.y) fbx.rotation.y = Math.PI/2;
+  fbx.updateMatrixWorld(true);
+  const b1 = new THREE.Box3().setFromObject(fbx);
+  const s1 = b1.getSize(new THREE.Vector3());
+  fbx.scale.setScalar(7.5 / Math.max(s1.x, s1.y, s1.z));
+  fbx.updateMatrixWorld(true);
+  const b2 = new THREE.Box3().setFromObject(fbx);
+  fbx.position.sub(b2.getCenter(new THREE.Vector3()));
+
+  const meshes = [];
+  fbx.traverse(o => { if (o.isMesh) meshes.push(o); });
+  if (!meshes.length) { statusEl.textContent = 'FBX had no meshes — showing procedural gearbox'; return; }
+
+  for (const p of parts) root.remove(p);
+  parts.length = 0;
+  scene.add(fbx);
+  fbx.updateMatrixWorld(true);
+
+  // full PBR texture sets extracted from the Unity project, matched per part
+  const texLoader = new THREE.TextureLoader();
+  const texCache = {};
+  const tex = (file, srgb) => {
+    if (!(file in texCache)) {
+      const t = texLoader.load('assets/textures/' + file);
+      if (srgb) t.colorSpace = THREE.SRGBColorSpace;
+      texCache[file] = t;
+    }
+    return texCache[file];
+  };
+  for (const m of meshes) {
+    const src = Array.isArray(m.material) ? m.material[0] : m.material;
+    const id = ((m.name || '') + ' ' + ((src && src.name) || '')).match(/part[_ ]?(\d+)/i);
+    if (id) {
+      const p = 'powerdrill3dmodel_tripo_part_' + id[1] + '_';
+      m.material = new THREE.MeshStandardMaterial({
+        map: tex(p + 'basecolor.JPEG', true),
+        normalMap: tex(p + 'normal.JPEG'),
+        metalnessMap: tex(p + 'metallic.JPEG'),
+        roughnessMap: tex(p + 'roughness.JPEG'),
+        metalness: 1.0, roughness: 1.0,
+      });
+    } else {
+      m.material = new THREE.MeshStandardMaterial({
+        color: src && src.color ? src.color.clone() : new THREE.Color(0x8a929c),
+        metalness: 0.5, roughness: 0.45,
+      });
+    }
+    root.attach(m);                       // re-parent, world transform preserved
+    const mc = new THREE.Box3().setFromObject(m).getCenter(new THREE.Vector3());
+    const dir = mc.clone();
+    dir.y *= 1.6;                         // bias vertical separation for readability
+    if (dir.length() < 0.05) dir.set(0, 1, 0);
+    const r = Math.min(1, mc.length() / 4);   // outer parts leave first
+    m.userData.part = {
+      name: id ? 'Drill part ' + id[1] : ((m.name || 'Part').replace(/[_.:]/g, ' ').trim() || 'Part'),
+      base: m.position.clone(), dir: dir.normalize(), dist: 1.2 + r * 3.2,
+      order: 1 - r, spin: 0, unscrew: false };
+    m.userData.owner = m;
+    parts.push(m);
+  }
+  scene.remove(fbx);
+  buildGuides();
+  statusEl.textContent = meshes.length + ' parts · your DrillAssembly.fbx, live';
+  window.__drill = { names: parts.map(p => p.userData.part.name),
+                     textured: parts.filter(p => p.material.map).length };
+}, xhr => {
+  if (xhr.total) statusEl.textContent = 'loading your drill… ' + Math.round(xhr.loaded / xhr.total * 100) + '%';
+}, () => {
+  statusEl.textContent = 'drill model failed to load — showing procedural gearbox';
+});
+
+// ── explode + hover ─────────────────────────────────────────
+const slider = document.getElementById('explode');
+const auto = document.getElementById('auto');
+const tag = document.getElementById('tag');
+const raycaster = new THREE.Raycaster();
+const mouse = new THREE.Vector2(-2, -2);
+let hovered = null;
+
+addEventListener('pointermove', e => {
+  mouse.x = (e.clientX / innerWidth) * 2 - 1;
+  mouse.y = -(e.clientY / innerHeight) * 2 + 1;
+  tag.style.left = e.clientX + 'px';
+  tag.style.top = e.clientY + 'px';
+});
+
+function setHighlight(part, on) {
+  part.traverse(o => {
+    if (o.isMesh) o.material.emissive.setHex(on ? 0x774411 : 0x000000);
+  });
+}
+
+const ease = t => t*t*(3 - 2*t);
+const clock = new THREE.Clock();
+let last = 0;
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+  const dt = Math.min(t - last, 0.05);
+  last = t;
+
+  if (auto.checked) slider.value = (0.5 - 0.5*Math.cos(t*0.6)) * 100;
+  const k = slider.value / 100;
+
+  // staggered teardown: screws first, then caps, shells, bearings, gears
+  for (const p of parts) {
+    const d = p.userData.part;
+    const kk = ease(Math.min(1, Math.max(0, k * 1.45 - 0.45 * d.order)));
+    p.position.copy(d.base).addScaledVector(d.dir, d.dist * kk);
+    if (d.spin) p.rotation.x += d.spin * dt * (1 - k);      // machine runs while assembled
+    if (d.unscrew && kk > 0 && kk < 1) p.rotation.x += 14 * dt;
+  }
+  guideMat.opacity = 0.3 * k;
+
+  raycaster.setFromCamera(mouse, camera);
+  const hits = raycaster.intersectObjects(parts, true);
+  const top = hits.length ? hits[0].object.userData.owner : null;
+  if (top !== hovered) {
+    if (hovered) setHighlight(hovered, false);
+    hovered = top;
+    if (hovered) {
+      setHighlight(hovered, true);
+      tag.textContent = hovered.userData.part.name;
+      tag.style.display = 'block';
+    } else tag.style.display = 'none';
+  }
+
+  controls.update();
+  gradePass.uniforms.uTime.value = t;
+  composer.render();
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>

@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Terrainwave — drive your music through a mountain range</title>
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#0a0512; font-family:"Segoe UI", system-ui, sans-serif; color:#e8dff5; }
+  canvas.gl { display:block; }
+  #overlay {
+    position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+    background:rgba(10,5,18,.86); backdrop-filter:blur(4px); z-index:10; text-align:center; padding:24px;
+  }
+  #overlay h1 { font-size:26px; letter-spacing:.2em; text-transform:uppercase; color:#ff6ec7; margin:0 0 10px;
+                text-shadow:0 0 24px rgba(255,110,199,.6); }
+  #overlay p { font-size:14px; color:#a894c4; max-width:460px; line-height:1.6; margin:0 0 26px; }
+  #overlay.drag { background:rgba(50,10,60,.9); }
+  .btn { background:linear-gradient(135deg,#ff6ec7,#7a3cff); color:#fff; border:none; border-radius:10px;
+         padding:14px 30px; font-size:15px; letter-spacing:.1em; text-transform:uppercase; cursor:pointer; }
+  .btn:hover { filter:brightness(1.15); }
+  #file { display:none; }
+  .alt { margin-top:16px; font-size:12px; color:#7a6a94; }
+  .alt a { color:#c9a4ff; cursor:pointer; text-decoration:underline; }
+  #np { position:fixed; top:18px; left:0; right:0; text-align:center; font-size:12px; letter-spacing:.18em;
+        text-transform:uppercase; color:#a894c4; display:none; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="overlay">
+  <h1>Terrainwave</h1>
+  <p>Your music, carved into a mountain range in real time — fly through the
+     valley your track creates. Drop an MP3 anywhere on this page
+     (<i>Tame Impala&nbsp;–&nbsp;Loser.mp3</i> from your musicvisualizer folder works great)…</p>
+  <button class="btn" id="demoBtn">▶ or play the built-in demo track</button>
+  <div class="alt">…or <a id="pick">browse for an audio file</a></div>
+  <input id="file" type="file" accept="audio/*" />
+</div>
+<div id="np"></div>
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.domElement.className = 'gl';
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+document.body.appendChild(renderer.domElement);
+
+// grade: beat-driven chromatic aberration + vignette + grain
+const GradeShader = {
+  uniforms: { tDiffuse:{value:null}, uTime:{value:0}, uAberration:{value:0.0012} },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uTime; uniform float uAberration; varying vec2 vUv;
+    void main(){
+      vec2 d = (vUv - 0.5) * uAberration;
+      vec3 col;
+      col.r = texture2D(tDiffuse, vUv + d).r;
+      col.g = texture2D(tDiffuse, vUv).g;
+      col.b = texture2D(tDiffuse, vUv - d).b;
+      float vig = smoothstep(0.95, 0.35, distance(vUv, vec2(0.5)));
+      col *= 0.68 + 0.32 * vig;
+      col += (fract(sin(dot(vUv + fract(uTime)*0.1, vec2(12.9898,78.233)))*43758.5453) - 0.5) * 0.05;
+      gl_FragColor = vec4(col, 1.0);
+    }`
+};
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x0a0512);
+scene.fog = new THREE.Fog(0x0a0512, 55, 150);
+
+const camera = new THREE.PerspectiveCamera(62, innerWidth/innerHeight, 0.1, 400);
+camera.position.set(0, 3.2, 6);
+camera.lookAt(0, 2, -80);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.85, 0.7, 0.2));
+const gradePass = new ShaderPass(GradeShader);
+composer.addPass(gradePass);
+composer.addPass(new OutputPass());
+
+// ── terrain grid (custom geometry: rows flow toward the camera) ──
+const COLS = 96, ROWS = 150, W = 64, D = 150;
+const heights = new Float32Array(ROWS * COLS);
+const positions = new Float32Array(ROWS * COLS * 3);
+const colors = new Float32Array(ROWS * COLS * 3);
+const indices = [];
+for (let r = 0; r < ROWS; r++) for (let c = 0; c < COLS; c++) {
+  const i = r * COLS + c;
+  positions[i*3]     = (c/(COLS-1) - 0.5) * W;
+  positions[i*3 + 1] = 0;
+  positions[i*3 + 2] = -D + (r/(ROWS-1)) * D;   // r=0 far, r=ROWS-1 at camera
+}
+for (let r = 0; r < ROWS-1; r++) for (let c = 0; c < COLS-1; c++) {
+  const a = r*COLS + c, b = a + 1, cc = a + COLS, d = cc + 1;
+  indices.push(a, cc, b, b, cc, d);
+}
+const geo = new THREE.BufferGeometry();
+geo.setAttribute('position', new THREE.BufferAttribute(positions, 3));
+geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+geo.setIndex(indices);
+
+const solid = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({
+  color:0x05030a, polygonOffset:true, polygonOffsetFactor:1, polygonOffsetUnits:1 }));
+const wire = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ vertexColors:true, wireframe:true }));
+scene.add(solid, wire);
+
+// ── synthwave sun ───────────────────────────────────────────
+const sunCanvas = document.createElement('canvas');
+sunCanvas.width = sunCanvas.height = 256;
+const sctx = sunCanvas.getContext('2d');
+const grad = sctx.createRadialGradient(128, 128, 10, 128, 128, 128);
+grad.addColorStop(0, 'rgba(255,205,140,0.75)');
+grad.addColorStop(0.45, 'rgba(255,110,199,0.55)');
+grad.addColorStop(1, 'rgba(255,110,199,0)');
+sctx.fillStyle = grad;
+sctx.fillRect(0, 0, 256, 256);
+const sun = new THREE.Mesh(
+  new THREE.PlaneGeometry(46, 46),
+  new THREE.MeshBasicMaterial({ map:new THREE.CanvasTexture(sunCanvas), transparent:true,
+    blending:THREE.AdditiveBlending, depthWrite:false, fog:false }));
+sun.position.set(0, 12, -148);
+scene.add(sun);
+
+// stars
+{
+  const n = 700, p = new Float32Array(n*3);
+  for (let i = 0; i < n; i++) {
+    p[i*3] = (Math.random()-0.5)*360;
+    p[i*3+1] = 12 + Math.random()*120;
+    p[i*3+2] = -150 - Math.random()*80;
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(p, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color:0xbfaaff, size:0.7, fog:false })));
+}
+
+// ── audio ───────────────────────────────────────────────────
+let ctx = null, analyser = null, freq = null, running = false;
+let currentSource = null, synthTimer = null;
+const overlay = document.getElementById('overlay');
+const np = document.getElementById('np');
+
+function ensureCtx() {
+  if (!ctx) {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+    analyser = ctx.createAnalyser();
+    analyser.fftSize = 1024;
+    analyser.smoothingTimeConstant = 0.82;
+    freq = new Uint8Array(analyser.frequencyBinCount);
+    analyser.connect(ctx.destination);
+  }
+  ctx.resume();
+}
+function stopCurrent() {
+  if (currentSource) { try { currentSource.stop(); } catch(e){} currentSource = null; }
+  if (synthTimer) { clearInterval(synthTimer); synthTimer = null; }
+}
+function begin(label) {
+  running = true;
+  overlay.style.display = 'none';
+  np.style.display = 'block';
+  np.textContent = '♫ ' + label;
+}
+
+async function playFile(file) {
+  ensureCtx(); stopCurrent();
+  const buf = await ctx.decodeAudioData(await file.arrayBuffer());
+  const src = ctx.createBufferSource();
+  src.buffer = buf;
+  src.loop = true;
+  src.connect(analyser);
+  src.start();
+  currentSource = src;
+  begin(file.name.replace(/\.[^.]+$/, ''));
+}
+
+// tiny built-in synthwave track
+function playSynth() {
+  ensureCtx(); stopCurrent();
+  const master = ctx.createGain();
+  master.gain.value = 0.5;
+  master.connect(analyser);
+  const noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 0.2, ctx.sampleRate);
+  const nd = noiseBuf.getChannelData(0);
+  for (let i = 0; i < nd.length; i++) nd[i] = Math.random()*2 - 1;
+
+  const env = (g, t, a, peak, dur) => {
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.linearRampToValueAtTime(peak, t + a);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  };
+  const kick = t => {
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.frequency.setValueAtTime(150, t);
+    o.frequency.exponentialRampToValueAtTime(42, t + 0.12);
+    env(g, t, 0.002, 1.0, 0.3);
+    o.connect(g).connect(master); o.start(t); o.stop(t + 0.32);
+  };
+  const hat = t => {
+    const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    s.buffer = noiseBuf; f.type = 'highpass'; f.frequency.value = 7500;
+    env(g, t, 0.001, 0.16, 0.06);
+    s.connect(f).connect(g).connect(master); s.start(t); s.stop(t + 0.08);
+  };
+  const bass = (t, semi) => {
+    const o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    o.type = 'sawtooth'; o.frequency.value = 55 * Math.pow(2, semi/12);
+    f.type = 'lowpass'; f.frequency.value = 320;
+    env(g, t, 0.01, 0.5, 0.42);
+    o.connect(f).connect(g).connect(master); o.start(t); o.stop(t + 0.45);
+  };
+  const lead = (t, semi) => {
+    const o = ctx.createOscillator(), f = ctx.createBiquadFilter(), g = ctx.createGain();
+    o.type = 'square'; o.frequency.value = 220 * Math.pow(2, semi/12);
+    f.type = 'lowpass'; f.frequency.value = 2100;
+    env(g, t, 0.005, 0.13, 0.2);
+    o.connect(f).connect(g).connect(master); o.start(t); o.stop(t + 0.22);
+  };
+
+  const spb = 60/124, sixteenth = spb/4;
+  const scaleNotes = [0, 3, 5, 7, 10, 12, 15, 17];
+  const roots = [0, 0, -2, 3];
+  let step = 0, nextT = ctx.currentTime + 0.1;
+  synthTimer = setInterval(() => {
+    while (nextT < ctx.currentTime + 0.18) {
+      const s = step % 16, bar = Math.floor(step/16) % 4, root = roots[bar];
+      if (s % 4 === 0) kick(nextT);
+      if (s % 2 === 0) hat(nextT + sixteenth);
+      if (s % 8 === 0) bass(nextT, root);
+      if (s % 8 === 6) bass(nextT, root + 7);
+      lead(nextT, root + scaleNotes[(step*5 + bar) % 8]);
+      nextT += sixteenth; step++;
+    }
+  }, 30);
+  begin('built-in demo track (124 bpm)');
+}
+
+document.getElementById('demoBtn').addEventListener('click', playSynth);
+const fileInput = document.getElementById('file');
+document.getElementById('pick').addEventListener('click', () => fileInput.click());
+fileInput.addEventListener('change', () => fileInput.files[0] && playFile(fileInput.files[0]));
+addEventListener('dragover', e => { e.preventDefault(); overlay.classList.add('drag'); });
+addEventListener('dragleave', () => overlay.classList.remove('drag'));
+addEventListener('drop', e => {
+  e.preventDefault();
+  overlay.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f) playFile(f);
+});
+
+// ── palette ─────────────────────────────────────────────────
+const cLow = new THREE.Color(0x3a1060);
+const cMid = new THREE.Color(0xff2e97);
+const cHigh = new THREE.Color(0x5ce8ff);
+const tmp = new THREE.Color();
+
+const center = (COLS - 1) / 2;
+const clock = new THREE.Clock();
+let bassFast = 0, bassSlow = 0, beatEnv = 0;   // beat detector state
+
+function animate() {
+  requestAnimationFrame(animate);
+  const t = clock.getElapsedTime();
+
+  let bass = 0;
+  if (running && analyser) {
+    analyser.getByteFrequencyData(freq);
+    for (let i = 2; i < 9; i++) bass += freq[i];
+    bass /= 7 * 255;
+
+    // beat = fast bass envelope punching above its own average
+    bassFast += (bass - bassFast) * 0.4;
+    bassSlow += (bass - bassSlow) * 0.03;
+    beatEnv = Math.max(beatEnv * 0.9, Math.min(1, (bassFast - bassSlow) * 5));
+
+    // scroll rows toward the camera, write the spectrum into the far row
+    heights.copyWithin(COLS, 0, (ROWS - 1) * COLS);
+    for (let c = 0; c < COLS; c++) {
+      const d = Math.abs(c - center) / center;                 // 0 centre → 1 edge
+      const fi = Math.min(freq.length - 1, Math.floor(Math.pow(d, 1.35) * 180) + 2);
+      const v = freq[fi] / 255;
+      heights[c] = Math.pow(v, 1.7) * 10 * (0.25 + Math.min(1, (d - 0.1) / 0.35) * 0.75 * (d > 0.1 ? 1 : 0)) * (1 + d*0.9);
+    }
+
+    for (let i = 0; i < ROWS * COLS; i++) {
+      const h = heights[i];
+      positions[i*3 + 1] = h;
+      const k = Math.min(1, h / 8);
+      if (k < 0.5) tmp.copy(cLow).lerp(cMid, k*2);
+      else tmp.copy(cMid).lerp(cHigh, (k - 0.5)*2);
+      tmp.multiplyScalar(0.6 + bass*0.55 + beatEnv*0.55 + k*beatEnv*0.6);   // peaks overdrive past 1.0 → bloom
+      colors[i*3] = tmp.r; colors[i*3+1] = tmp.g; colors[i*3+2] = tmp.b;
+    }
+    geo.attributes.position.needsUpdate = true;
+    geo.attributes.color.needsUpdate = true;
+  }
+
+  sun.scale.setScalar(1 + bass * 0.18 + beatEnv * 0.3);
+  camera.position.y = 3.2 + bass * 0.5;
+  camera.position.x = Math.sin(t * 0.18) * 1.4;
+  camera.fov = 62 + bass * 5 + beatEnv * 9;      // FOV kick on the beat
+  camera.updateProjectionMatrix();
+  camera.lookAt(Math.sin(t * 0.18) * 3, 2.2, -90);
+
+  gradePass.uniforms.uTime.value = t;
+  gradePass.uniforms.uAberration.value = 0.0012 + beatEnv * 0.007;
+  composer.render();
+}
+animate();
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
