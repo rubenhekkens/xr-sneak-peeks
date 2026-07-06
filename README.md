@@ -1,6 +1,6 @@
 # XR Sneak Peeks
 
-Five real-time 3D demos, each a **single self-contained HTML file** (three.js 0.160 from CDN, no build step).
+Six real-time 3D demos, each a **single self-contained HTML file** (three.js 0.160 from CDN, no build step).
 
 **▶ Live: https://rubenhekkens.github.io/xr-sneak-peeks/**
 
@@ -11,6 +11,7 @@ Five real-time 3D demos, each a **single self-contained HTML file** (three.js 0.
 | 3 | [Silicon Dive](3-powers-of-chip.html) | Powers of Ten into a chip: motherboard → die → FinFET → silicon lattice in one scroll |
 | 4 | [Terrainwave](4-terrainwave.html) | Your music carved into a synthwave mountain range — drop an MP3, beat-detected camera |
 | 5 | [Holo Twin](5-machine-twin.html) | Holographic digital twin of a vacuum vessel: live telemetry, injectable anomaly |
+| 6 | [Leyline](6-leyline.html) | Meta Ray-Ban Display + Neural Band concept — hunt a handwritten echo through a neon night city by haptic sonar, reply in your own hand (WebXR: real controller haptics) |
 
 All demos share a cinematic pipeline: ACES tone mapping, Unreal bloom, film grain, vignette and chromatic aberration.
 

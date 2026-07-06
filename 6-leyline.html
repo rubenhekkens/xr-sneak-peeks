@@ -1,0 +1,811 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Leyline — find the echo by feel</title>
+<meta name="description" content="A Meta Ray-Ban Display + Neural Band concept demo: navigate a night city by haptic sonar, find a handwritten echo, reply in your own hand." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Caveat:wght@600&display=swap" rel="stylesheet">
+<style>
+  html, body { margin:0; height:100%; overflow:hidden; background:#05070c; font-family:"Segoe UI", system-ui, sans-serif; color:#d9fff2; }
+  canvas.gl { display:block; }
+
+  #intro { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+           background:radial-gradient(ellipse at 50% 60%, rgba(10,20,17,.88), rgba(3,5,8,.97)); z-index:30;
+           transition:opacity 1.2s; }
+  #intro.gone { opacity:0; pointer-events:none; }
+  #intro h1 { font-size:54px; letter-spacing:.42em; margin:0 0 10px; font-weight:300; color:#d9fff2;
+              text-shadow:0 0 30px rgba(93,202,165,.5); padding-left:.42em; }
+  #intro .tag { color:#5dcaa5; font-size:13px; letter-spacing:.24em; text-transform:uppercase; margin-bottom:26px; }
+  #intro p { color:#7fa596; font-size:14px; max-width:460px; text-align:center; line-height:1.7; margin:0 0 30px; }
+  #begin { background:rgba(93,202,165,.1); color:#9fe1cb; border:1px solid rgba(93,202,165,.55); border-radius:10px;
+           padding:14px 34px; font-size:14px; letter-spacing:.18em; text-transform:uppercase; cursor:pointer; }
+  #begin:hover { background:rgba(93,202,165,.22); box-shadow:0 0 24px rgba(93,202,165,.25); }
+  #intro .keys { margin-top:22px; font-size:11px; color:#42604f; letter-spacing:.08em; }
+
+  #band { position:fixed; bottom:22px; left:22px; display:flex; align-items:center; gap:14px; z-index:10;
+          background:rgba(4,12,10,.72); border:1px solid rgba(93,202,165,.25); border-radius:12px; padding:12px 18px;
+          backdrop-filter:blur(6px); }
+  #pulsewrap { position:relative; width:26px; height:26px; flex:none; }
+  #ring  { position:absolute; inset:0; border:2px solid #5dcaa5; border-radius:50%; opacity:0; }
+  #ring2 { position:absolute; inset:0; border:1px solid #5dcaa5; border-radius:50%; opacity:0; }
+  #dot   { position:absolute; inset:7px; background:#1d9e75; border-radius:50%; box-shadow:0 0 10px rgba(93,202,165,.8); }
+  #band .lbl { font-size:10px; letter-spacing:.2em; color:#5f93a6; text-transform:uppercase; }
+  #tempo { font-size:16px; font-weight:600; color:#d9fff2; letter-spacing:.06em; min-width:64px; }
+  #emg { display:flex; gap:3px; align-items:flex-end; height:20px; }
+  #emg span { width:4px; background:#1d9e75; height:3px; border-radius:2px; transition:height .1s; }
+
+  #hudwrap { position:fixed; right:15%; top:52%; z-index:10; opacity:0; transition:opacity .5s; pointer-events:none; }
+  #hudwrap.on { opacity:1; animation:wake .5s steps(3); }
+  @keyframes wake { 0%{opacity:0} 40%{opacity:.9} 55%{opacity:.2} 100%{opacity:1} }
+  #hudwrap .lens { font-size:9px; letter-spacing:.25em; color:#3f7a68; text-align:right; margin-bottom:5px; }
+  #hud { width:172px; border:1px solid rgba(93,202,165,.45); border-radius:12px; background:rgba(6,18,15,.55);
+         padding:14px 16px; text-align:center; backdrop-filter:blur(3px); box-shadow:0 0 30px rgba(93,202,165,.12) inset; }
+  #hud .e { font-size:10px; letter-spacing:.22em; color:#5dcaa5; }
+  #dst { font-size:30px; font-weight:600; color:#d9fff2; margin:4px 0 2px; font-variant-numeric:tabular-nums; }
+  #chev { width:34px; height:34px; margin:2px auto 0; transition:transform .2s; }
+  #hud .a { font-size:10px; color:#3f7a68; margin-top:6px; letter-spacing:.1em; }
+
+  #meta { position:fixed; top:9%; left:0; right:0; text-align:center; font-size:12px; letter-spacing:.22em; color:#5dcaa5;
+          opacity:0; transition:opacity 1s; z-index:10; text-transform:uppercase; }
+  #meta.on { opacity:.9; }
+
+  #hint { position:fixed; bottom:22px; left:0; right:0; text-align:center; font-size:12px; color:#4d7263;
+          letter-spacing:.12em; z-index:9; transition:opacity .6s; }
+
+  .act { position:fixed; left:50%; transform:translateX(-50%); z-index:12; display:flex; gap:12px; opacity:0;
+         pointer-events:none; transition:opacity .8s; bottom:12%; }
+  .act.on { opacity:1; pointer-events:auto; }
+  .act button { background:rgba(93,202,165,.09); color:#9fe1cb; border:1px solid rgba(93,202,165,.5); border-radius:9px;
+                padding:11px 20px; font-size:12px; letter-spacing:.14em; text-transform:uppercase; cursor:pointer; }
+  .act button:hover { background:rgba(93,202,165,.2); }
+
+  #sealed { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+            gap:14px; background:rgba(3,7,6,.55); z-index:20; opacity:0; pointer-events:none; transition:opacity 1s; }
+  #sealed.on { opacity:1; pointer-events:auto; }
+  #sealed .pin { font-size:34px; }
+  #sealed .co { font-size:17px; color:#d9fff2; letter-spacing:.06em; text-align:center; line-height:1.7; }
+  #sealed .co small { display:block; font-size:13px; color:#5dcaa5; }
+  #title { position:fixed; top:16px; left:0; right:0; text-align:center; font-size:11px; color:#3c5a4e;
+           letter-spacing:.14em; z-index:8; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+
+<div id="intro">
+  <h1>LEYLINE</h1>
+  <div class="tag">Ray-Ban Display &middot; Neural Band &middot; sneak peek 06</div>
+  <p>Somewhere in this city someone left a handwritten echo, pinned to the spot where they wrote it.
+     Your glasses stay dark. Your wristband pulses — faster when you face it, racing when you're close.
+     Find it by feel. Answer in your own hand.</p>
+  <button id="begin">Begin the walk</button>
+  <div class="keys">WASD / arrows walk &middot; mouse look (click to lock) &middot; shift run &middot; on Quest: sticks + real haptics</div>
+</div>
+
+<div id="band">
+  <div id="pulsewrap"><span id="ring"></span><span id="ring2"></span><span id="dot"></span></div>
+  <div><div class="lbl">Neural band &middot; haptic tempo</div><div id="tempo">cold</div></div>
+  <div id="emg"><span></span><span></span><span></span><span></span><span></span></div>
+</div>
+
+<div id="hudwrap"><div class="lens">RIGHT LENS &middot; 20&deg; &middot; 600&times;600</div>
+  <div id="hud">
+    <div class="e">ECHO 01</div>
+    <div id="dst">&mdash;</div>
+    <svg id="chev" viewBox="0 0 34 34"><path d="M17 4 L27 26 L17 20 L7 26 Z" fill="none" stroke="#5dcaa5" stroke-width="2" stroke-linejoin="round"/></svg>
+    <div class="a">ALIGN &middot; WALK</div>
+  </div>
+</div>
+
+<div id="meta">Echo 01 &middot; M. &middot; 11 days old &middot; found 3&times;</div>
+<div id="replyact" class="act"><button id="replyb">Leave a reply &mdash; write with your hand at your side</button></div>
+<div id="writeact" class="act"><button id="sealb">Double-pinch &middot; seal echo here</button><button id="fadeb">Twist &middot; let it fade</button></div>
+
+<div id="sealed">
+  <div class="pin">&#128205;</div>
+  <div class="co">Echo sealed at 51.4487&deg; N, 5.4562&deg; E<br>
+    <small>It fades in 30 days unless someone walks here and feels it.</small></div>
+  <div class="act on" style="position:static; transform:none;"><button id="againb">Walk it again</button></div>
+</div>
+
+<div id="title">LEYLINE &middot; a memory layer you navigate by feel &middot; the display sleeps until you earn it</div>
+<div id="hint"></div>
+
+<script type="module">
+import * as THREE from 'three';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+import { VRButton } from 'three/addons/webxr/VRButton.js';
+
+// ── renderer / scene ─────────────────────────────────────────
+const renderer = new THREE.WebGLRenderer({ antialias:true });
+renderer.domElement.className = 'gl';
+renderer.setSize(innerWidth, innerHeight);
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.xr.enabled = true;
+document.body.appendChild(renderer.domElement);
+document.body.appendChild(VRButton.createButton(renderer));
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(0x04060b);
+scene.fog = new THREE.FogExp2(0x04060b, 0.011);
+
+const rig = new THREE.Group();
+scene.add(rig);
+const camera = new THREE.PerspectiveCamera(62, innerWidth/innerHeight, 0.1, 600);
+camera.position.set(0, 1.7, 0);
+rig.add(camera);
+
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+composer.addPass(new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), 0.95, 0.75, 0.22));
+const GradeShader = {
+  uniforms: { tDiffuse:{value:null}, uTime:{value:0} },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader: `
+    uniform sampler2D tDiffuse; uniform float uTime; varying vec2 vUv;
+    void main(){
+      vec2 d = (vUv - 0.5) * 0.0028;
+      vec3 col;
+      col.r = texture2D(tDiffuse, vUv + d).r;
+      col.g = texture2D(tDiffuse, vUv).g;
+      col.b = texture2D(tDiffuse, vUv - d).b;
+      float vig = smoothstep(0.95, 0.32, distance(vUv, vec2(0.5)));
+      col *= 0.62 + 0.38 * vig;
+      col += (fract(sin(dot(vUv + fract(uTime)*0.1, vec2(12.9898,78.233)))*43758.5453) - 0.5) * 0.04;
+      gl_FragColor = vec4(col, 1.0);
+    }`
+};
+const gradePass = new ShaderPass(GradeShader);
+composer.addPass(gradePass);
+composer.addPass(new OutputPass());
+
+// ── lighting ─────────────────────────────────────────────────
+scene.add(new THREE.HemisphereLight(0x1a2636, 0x05070a, 0.55));
+const moonLight = new THREE.DirectionalLight(0x8fb4dc, 0.3);
+moonLight.position.set(-40, 80, -30);
+scene.add(moonLight);
+
+// ── world layout ─────────────────────────────────────────────
+const ECHO = new THREE.Vector3(42, 0, -58);
+const SPAWN = new THREE.Vector3(0, 0, 0);
+let seed = 7;
+const rnd = () => { seed = (seed * 16807) % 2147483647; return (seed - 1) / 2147483646; };
+
+const ground = new THREE.Mesh(
+  new THREE.CircleGeometry(420, 48),
+  new THREE.MeshStandardMaterial({ color:0x0a0d12, metalness:0.75, roughness:0.4 }));
+ground.rotation.x = -Math.PI/2;
+scene.add(ground);
+
+// buildings — instanced boxes with an emissive window texture, corridor kept clear
+const winCv = document.createElement('canvas'); winCv.width = 128; winCv.height = 256;
+const wc = winCv.getContext('2d');
+wc.fillStyle = '#0a0d13'; wc.fillRect(0,0,128,256);
+for (let y=0; y<16; y++) for (let x=0; x<6; x++) {
+  const r = Math.sin(x*12.9+y*78.2)*43758.5; const f = r-Math.floor(r);
+  if (f > 0.62) { wc.fillStyle = f > 0.92 ? '#7fd8c8' : '#e8a45c'; wc.globalAlpha = 0.45+f*0.5; }
+  else { wc.fillStyle = '#11151d'; wc.globalAlpha = 1; }
+  wc.fillRect(10+x*19, 10+y*15, 10, 8);
+}
+wc.globalAlpha = 1;
+const winTex = new THREE.CanvasTexture(winCv);
+winTex.colorSpace = THREE.SRGBColorSpace;
+const sideMat = new THREE.MeshStandardMaterial({ map:winTex, emissiveMap:winTex, emissive:0xffffff, emissiveIntensity:0.85, color:0x30343c, roughness:0.85 });
+const roofMat = new THREE.MeshStandardMaterial({ color:0x0b0e14, roughness:0.95 });
+const boxGeo = new THREE.BoxGeometry(1, 1, 1);
+boxGeo.translate(0, 0.5, 0);
+const mats = [sideMat, sideMat, roofMat, roofMat, sideMat, sideMat];
+
+const segDist = (p, a, b) => {
+  const abx = b.x-a.x, abz = b.z-a.z, apx = p.x-a.x, apz = p.z-a.z;
+  const t = Math.max(0, Math.min(1, (apx*abx+apz*abz) / (abx*abx+abz*abz)));
+  return Math.hypot(apx - abx*t, apz - abz*t);
+};
+
+const colliders = [];
+const placements = [];
+for (let gx=-7; gx<=7; gx++) for (let gz=-8; gz<=2; gz++) {
+  const cx = gx*18 + (rnd()-0.5)*5, cz = gz*18 + (rnd()-0.5)*5;
+  const p = new THREE.Vector3(cx, 0, cz);
+  if (segDist(p, SPAWN, ECHO) < 11.5) continue;
+  if (p.distanceTo(SPAWN) < 15 || p.distanceTo(ECHO) < 15) continue;
+  if (rnd() < 0.22) continue;
+  const hw = 3.5 + rnd()*3.5, hd = 3.5 + rnd()*3.5;
+  const far = segDist(p, SPAWN, ECHO);
+  const h = 7 + rnd()*14 + Math.min(26, far*0.35);
+  placements.push({ x:cx, z:cz, hw, hd, h });
+  colliders.push({ x:cx, z:cz, hw:hw+0.7, hd:hd+0.7 });
+}
+const inst = new THREE.InstancedMesh(boxGeo, mats, placements.length);
+const m4 = new THREE.Matrix4();
+placements.forEach((b, i) => {
+  m4.makeScale(b.hw*2, b.h, b.hd*2).setPosition(b.x, 0, b.z);
+  inst.setMatrixAt(i, m4);
+});
+scene.add(inst);
+
+// neon signs near the corridor
+const neons = [];
+const neonCols = [0xff6ec7, 0x4fd8ff, 0x5dcaa5, 0xffb454];
+placements.filter(b => segDist(b, SPAWN, ECHO) < 26).slice(0, 12).forEach((b, i) => {
+  const mat = new THREE.MeshBasicMaterial({ color:neonCols[i % 4], transparent:true, opacity:0.9, fog:false });
+  const sign = new THREE.Mesh(new THREE.PlaneGeometry(0.6, 3 + rnd()*3), mat);
+  const side = rnd() > 0.5 ? 1 : -1;
+  sign.position.set(b.x + side*(b.hw+0.15), 4 + rnd()*5, b.z);
+  sign.rotation.y = side > 0 ? Math.PI/2 : -Math.PI/2;
+  scene.add(sign);
+  neons.push({ mat, base:0.75 + rnd()*0.25, ph:rnd()*9 });
+});
+
+// street lamps along the leyline
+const lampBulb = new THREE.MeshBasicMaterial({ color:0xffd9a0, fog:false });
+const lampPole = new THREE.MeshStandardMaterial({ color:0x14181f, roughness:0.9 });
+for (let i=0; i<8; i++) {
+  const t = 0.08 + i*0.115;
+  const px = SPAWN.x + (ECHO.x-SPAWN.x)*t + (i%2 ? 5.5 : -5.5);
+  const pz = SPAWN.z + (ECHO.z-SPAWN.z)*t + (i%2 ? -3 : 3);
+  const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 4.6, 6), lampPole);
+  pole.position.set(px, 2.3, pz);
+  scene.add(pole);
+  const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.16, 10, 10), lampBulb);
+  bulb.position.set(px, 4.6, pz);
+  scene.add(bulb);
+  const pool = new THREE.Mesh(new THREE.CircleGeometry(3.4, 20),
+    new THREE.MeshBasicMaterial({ color:0xffd9a0, transparent:true, opacity:0.045, blending:THREE.AdditiveBlending, depthWrite:false, fog:false }));
+  pool.rotation.x = -Math.PI/2; pool.position.set(px, 0.02, pz);
+  scene.add(pool);
+  if (i === 1 || i === 4 || i === 7) {
+    const pl = new THREE.PointLight(0xffc98a, 14, 22, 2);
+    pl.position.set(px, 4.4, pz);
+    scene.add(pl);
+  }
+}
+
+// stars + moon
+{
+  const n = 1400, pos = new Float32Array(n*3);
+  for (let i=0; i<n; i++) {
+    const th = rnd()*Math.PI*2, ph = Math.acos(rnd()*0.85);
+    pos[i*3]   = 480*Math.sin(ph)*Math.cos(th);
+    pos[i*3+1] = 480*Math.cos(ph) + 10;
+    pos[i*3+2] = 480*Math.sin(ph)*Math.sin(th);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ color:0x8899aa, size:0.9, sizeAttenuation:true, fog:false })));
+  const moon = new THREE.Mesh(new THREE.CircleGeometry(14, 32), new THREE.MeshBasicMaterial({ color:0xcfe0f2, fog:false }));
+  moon.position.set(-160, 190, -330);
+  moon.lookAt(0, 0, 0);
+  scene.add(moon);
+}
+
+// drifting dust
+const dust = (() => {
+  const n = 700, pos = new Float32Array(n*3);
+  for (let i=0; i<n*3; i++) pos[i] = (rnd()-0.5) * (i%3===1 ? 14 : 120);
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const p = new THREE.Points(g, new THREE.PointsMaterial({ color:0x5dcaa5, size:0.05, transparent:true, opacity:0.5, blending:THREE.AdditiveBlending, depthWrite:false }));
+  p.position.y = 7;
+  scene.add(p);
+  return p;
+})();
+
+// ── the echo ─────────────────────────────────────────────────
+const columnMat = new THREE.ShaderMaterial({
+  transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, side:THREE.DoubleSide, fog:false,
+  uniforms: { uTime:{value:0}, uOp:{value:0} },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader: `
+    uniform float uTime; uniform float uOp; varying vec2 vUv;
+    void main(){
+      float v = pow(1.0 - vUv.y, 1.6);
+      float s = 0.75 + 0.25*sin(vUv.y*24.0 - uTime*2.4);
+      gl_FragColor = vec4(0.36, 0.8, 0.65, v * s * uOp);
+    }`
+});
+const column = new THREE.Mesh(new THREE.CylinderGeometry(0.5, 0.7, 16, 20, 1, true), columnMat);
+column.position.copy(ECHO).setY(8);
+scene.add(column);
+const echoLight = new THREE.PointLight(0x5dcaa5, 0, 30, 2);
+echoLight.position.copy(ECHO).setY(3);
+scene.add(echoLight);
+
+// handwriting panel (revealed stroke-by-stroke on arrival)
+const msgCv = document.createElement('canvas'); msgCv.width = 1024; msgCv.height = 360;
+const msgTex = new THREE.CanvasTexture(msgCv);
+function paintMessage() {
+  const c = msgCv.getContext('2d');
+  c.clearRect(0, 0, 1024, 360);
+  c.fillStyle = '#fff';
+  c.font = '600 105px Caveat, cursive';
+  c.textAlign = 'center';
+  c.fillText('golden hour hits this', 512, 140);
+  c.fillText('corner just right — M', 512, 275);
+  msgTex.needsUpdate = true;
+}
+document.fonts.load('600 105px Caveat').then(paintMessage).catch(paintMessage);
+
+const panelMat = new THREE.ShaderMaterial({
+  transparent:true, depthWrite:false, blending:THREE.AdditiveBlending, side:THREE.DoubleSide, fog:false,
+  uniforms: { map:{value:msgTex}, uReveal:{value:0} },
+  vertexShader: 'varying vec2 vUv; void main(){ vUv=uv; gl_Position=projectionMatrix*modelViewMatrix*vec4(position,1.0); }',
+  fragmentShader: `
+    uniform sampler2D map; uniform float uReveal; varying vec2 vUv;
+    void main(){
+      float a = texture2D(map, vUv).a;
+      float vis = smoothstep(uReveal, uReveal - 0.015, vUv.x);
+      float edge = exp(-abs(vUv.x - uReveal) * 26.0);
+      vec3 col = vec3(0.55, 0.95, 0.8) * a * vis + vec3(0.75, 1.0, 0.92) * a * edge * 1.8;
+      gl_FragColor = vec4(col, a * (vis + edge));
+    }`
+});
+const panel = new THREE.Group();
+const glass = new THREE.Mesh(new THREE.PlaneGeometry(4.6, 1.8),
+  new THREE.MeshBasicMaterial({ color:0x06120e, transparent:true, opacity:0.5, side:THREE.DoubleSide, fog:false }));
+panel.add(glass);
+const txtMesh = new THREE.Mesh(new THREE.PlaneGeometry(4.4, 1.55), panelMat);
+txtMesh.position.z = 0.01;
+panel.add(txtMesh);
+const frame = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.PlaneGeometry(4.6, 1.8)),
+  new THREE.LineBasicMaterial({ color:0x5dcaa5, transparent:true, opacity:0.5, fog:false }));
+panel.add(frame);
+panel.position.copy(ECHO).setY(1.9);
+panel.rotation.y = Math.atan2(SPAWN.x - ECHO.x, SPAWN.z - ECHO.z);
+panel.visible = false;
+scene.add(panel);
+
+// ── audio (created on begin, after user gesture) ─────────────
+let AC = null, ambGain = null;
+function initAudio() {
+  AC = new (window.AudioContext || window.webkitAudioContext)();
+  const len = AC.sampleRate * 2, buf = AC.createBuffer(1, len, AC.sampleRate);
+  const d = buf.getChannelData(0);
+  for (let i=0; i<len; i++) d[i] = Math.random()*2 - 1;
+  const src = AC.createBufferSource(); src.buffer = buf; src.loop = true;
+  const lp = AC.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 170;
+  ambGain = AC.createGain(); ambGain.gain.value = 0.028;
+  src.connect(lp).connect(ambGain).connect(AC.destination);
+  src.start();
+}
+function tick(score) {
+  if (!AC) return;
+  const o = AC.createOscillator(), g = AC.createGain();
+  o.frequency.value = 480 + 640*score;
+  g.gain.setValueAtTime(0.055, AC.currentTime);
+  g.gain.exponentialRampToValueAtTime(0.0001, AC.currentTime + 0.06);
+  o.connect(g).connect(AC.destination);
+  o.start(); o.stop(AC.currentTime + 0.07);
+}
+
+// ── state ────────────────────────────────────────────────────
+let phase = 'intro';           // intro | seek | near | arrive | write | sealed
+let introT = -1;               // >=0 while tweening down from the aerial shot
+let yaw = 0, pitch = 0, walkPhase = 0, lastPulse = 0, revealT = -1;
+const keys = {};
+const hint = document.getElementById('hint');
+const hudwrap = document.getElementById('hudwrap');
+const dstEl = document.getElementById('dst');
+const chev = document.getElementById('chev');
+const tempoEl = document.getElementById('tempo');
+const ringEl = document.getElementById('ring');
+const ring2El = document.getElementById('ring2');
+const dotEl = document.getElementById('dot');
+const emgBars = document.querySelectorAll('#emg span');
+
+function setHint(t) { hint.textContent = t; }
+setHint('');
+
+// intro aerial shot
+rig.position.set(30, 52, 42);
+yaw = 0.5; pitch = -0.72;
+
+document.getElementById('begin').addEventListener('click', () => {
+  initAudio();
+  document.getElementById('intro').classList.add('gone');
+  introT = 0;
+});
+
+// ── input ────────────────────────────────────────────────────
+addEventListener('keydown', e => { keys[e.code] = true; });
+addEventListener('keyup', e => { keys[e.code] = false; });
+renderer.domElement.addEventListener('click', () => {
+  if (phase === 'seek' || phase === 'near') renderer.domElement.requestPointerLock();
+});
+addEventListener('mousemove', e => {
+  if (document.pointerLockElement !== renderer.domElement) return;
+  yaw -= e.movementX * 0.0021;
+  pitch = Math.max(-1.25, Math.min(1.25, pitch - e.movementY * 0.0021));
+});
+
+function tryMove(dx, dz) {
+  const nx = rig.position.x + dx, nz = rig.position.z + dz;
+  const blocked = (x, z) => colliders.some(b => Math.abs(x-b.x) < b.hw && Math.abs(z-b.z) < b.hd);
+  if (!blocked(nx, nz)) { rig.position.x = nx; rig.position.z = nz; return true; }
+  if (!blocked(nx, rig.position.z)) { rig.position.x = nx; return true; }
+  if (!blocked(rig.position.x, nz)) { rig.position.z = nz; return true; }
+  return false;
+}
+
+// ── reply strokes ────────────────────────────────────────────
+const strokes = [];
+let curLine = null, curPts = [], writeAnchor = null, writeNormal = null;
+const strokeMat = new THREE.MeshBasicMaterial({ color:0xaef7e2, blending:THREE.AdditiveBlending, transparent:true, opacity:0.95, depthWrite:false, fog:false });
+const liveMat = new THREE.LineBasicMaterial({ color:0x9fe1cb, transparent:true, opacity:0.9, fog:false });
+const rayc = new THREE.Raycaster();
+const wPlane = new THREE.Plane();
+
+function screenToPlane(cx, cy) {
+  const ndc = new THREE.Vector2((cx/innerWidth)*2 - 1, -(cy/innerHeight)*2 + 1);
+  rayc.setFromCamera(ndc, camera);
+  const p = new THREE.Vector3();
+  return rayc.ray.intersectPlane(wPlane, p) ? p : null;
+}
+addEventListener('pointerdown', e => {
+  if (phase !== 'write' || e.target !== renderer.domElement) return;
+  const p = screenToPlane(e.clientX, e.clientY);
+  if (!p) return;
+  curPts = [p];
+  curLine = new THREE.Line(new THREE.BufferGeometry().setFromPoints(curPts), liveMat);
+  scene.add(curLine);
+});
+addEventListener('pointermove', e => {
+  if (!curLine) return;
+  const p = screenToPlane(e.clientX, e.clientY);
+  if (!p || (curPts.length && p.distanceTo(curPts[curPts.length-1]) < 0.008)) return;
+  curPts.push(p);
+  curLine.geometry.dispose();
+  curLine.geometry = new THREE.BufferGeometry().setFromPoints(curPts);
+});
+addEventListener('pointerup', () => {
+  if (!curLine) return;
+  scene.remove(curLine); curLine.geometry.dispose(); curLine = null;
+  if (curPts.length >= 3) {
+    const curve = new THREE.CatmullRomCurve3(curPts);
+    const tube = new THREE.Mesh(new THREE.TubeGeometry(curve, curPts.length*2, 0.013, 6), strokeMat);
+    scene.add(tube);
+    strokes.push(tube);
+  }
+  curPts = [];
+});
+
+// seal burst particles
+let burst = null;
+function makeBurst(at) {
+  const n = 140, pos = new Float32Array(n*3), vel = [];
+  for (let i=0; i<n; i++) {
+    pos[i*3] = at.x; pos[i*3+1] = at.y; pos[i*3+2] = at.z;
+    const th = Math.random()*Math.PI*2, ph = Math.acos(Math.random()*2-1), sp = 1.5 + Math.random()*3;
+    vel.push(new THREE.Vector3(Math.sin(ph)*Math.cos(th)*sp, Math.cos(ph)*sp + 2, Math.sin(ph)*Math.sin(th)*sp));
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  const mat = new THREE.PointsMaterial({ color:0x9fe1cb, size:0.07, transparent:true, opacity:1, blending:THREE.AdditiveBlending, depthWrite:false });
+  const pts = new THREE.Points(g, mat);
+  scene.add(pts);
+  burst = { pts, vel, t:0 };
+}
+
+// ── phase transitions ────────────────────────────────────────
+const metaEl = document.getElementById('meta');
+const replyact = document.getElementById('replyact');
+const writeact = document.getElementById('writeact');
+
+function enterArrive() {
+  phase = 'arrive';
+  hudwrap.classList.remove('on');
+  document.exitPointerLock && document.exitPointerLock();
+  metaEl.classList.add('on');
+  panel.visible = true;
+  revealT = 0;
+  tempoEl.textContent = 'still';
+  setHint('');
+}
+function enterWrite() {
+  phase = 'write';
+  replyact.classList.remove('on');
+  document.exitPointerLock && document.exitPointerLock();
+  const dir = new THREE.Vector3();
+  camera.getWorldDirection(dir);
+  writeAnchor = camera.getWorldPosition(new THREE.Vector3()).addScaledVector(dir, 2.1);
+  writeNormal = dir.clone().negate();
+  wPlane.setFromNormalAndCoplanarPoint(writeNormal, writeAnchor);
+  writeact.classList.add('on');
+  setHint('draw in the air with your mouse — the band reads the strokes from your wrist');
+}
+function seal() {
+  phase = 'sealed';
+  writeact.classList.remove('on');
+  metaEl.classList.remove('on');
+  const target = writeAnchor || panel.position;
+  makeBurst(target);
+  strokes.forEach(s => {
+    s.geometry.translate(-target.x, -target.y, -target.z);
+    s.position.copy(target);
+    s.userData.sealT = 0;
+  });
+  tick(1); tick(1);
+  setTimeout(() => document.getElementById('sealed').classList.add('on'), 1100);
+  setHint('');
+}
+document.getElementById('replyb').addEventListener('click', enterWrite);
+document.getElementById('sealb').addEventListener('click', seal);
+document.getElementById('fadeb').addEventListener('click', () => {
+  strokes.forEach(s => { scene.remove(s); s.geometry.dispose(); });
+  strokes.length = 0;
+});
+document.getElementById('againb').addEventListener('click', () => location.reload());
+
+// ── XR controllers: sticks move, real haptic pulses, trigger draws ──
+const ctl0 = renderer.xr.getController(0), ctl1 = renderer.xr.getController(1);
+scene.add(ctl0); scene.add(ctl1);
+let xrDrawing = null;
+[ctl0, ctl1].forEach(c => {
+  c.addEventListener('selectstart', () => { if (phase === 'write') xrDrawing = c; if (phase === 'arrive') enterWrite(); });
+  c.addEventListener('selectend', () => {
+    if (xrDrawing === c) {
+      xrDrawing = null;
+      if (curPts.length >= 3) {
+        const tube = new THREE.Mesh(new THREE.TubeGeometry(new THREE.CatmullRomCurve3(curPts), curPts.length*2, 0.013, 6), strokeMat);
+        scene.add(tube); strokes.push(tube);
+      }
+      if (curLine) { scene.remove(curLine); curLine.geometry.dispose(); curLine = null; }
+      curPts = [];
+    }
+  });
+  c.addEventListener('squeezestart', () => { if (phase === 'write' && strokes.length) seal(); });
+});
+function xrPulse(score) {
+  const s = renderer.xr.getSession();
+  if (!s) return;
+  for (const src of s.inputSources) {
+    const h = src.gamepad && src.gamepad.hapticActuators && src.gamepad.hapticActuators[0];
+    if (h && h.pulse) h.pulse(0.25 + 0.7*score, 55);
+  }
+}
+let snapCool = 0;
+
+// in-XR HUD (DOM is invisible in-headset)
+const xrHudCv = document.createElement('canvas'); xrHudCv.width = 256; xrHudCv.height = 256;
+const xrHudTex = new THREE.CanvasTexture(xrHudCv);
+const xrHud = new THREE.Mesh(new THREE.PlaneGeometry(0.16, 0.16),
+  new THREE.MeshBasicMaterial({ map:xrHudTex, transparent:true, depthTest:false, fog:false }));
+xrHud.position.set(0.14, -0.1, -0.5);
+xrHud.renderOrder = 999;
+xrHud.visible = false;
+camera.add(xrHud);
+function drawXrHud(dist, rel) {
+  const c = xrHudCv.getContext('2d');
+  c.clearRect(0, 0, 256, 256);
+  c.fillStyle = 'rgba(6,18,15,0.72)'; c.strokeStyle = 'rgba(93,202,165,0.6)'; c.lineWidth = 3;
+  c.beginPath(); c.roundRect(4, 4, 248, 248, 22); c.fill(); c.stroke();
+  c.fillStyle = '#5dcaa5'; c.font = '18px monospace'; c.textAlign = 'center';
+  c.fillText('ECHO 01', 128, 52);
+  c.fillStyle = '#d9fff2'; c.font = '600 52px monospace';
+  c.fillText(Math.round(dist) + 'm', 128, 120);
+  c.save(); c.translate(128, 180); c.rotate(rel);
+  c.strokeStyle = '#5dcaa5'; c.lineWidth = 6; c.beginPath();
+  c.moveTo(0, -28); c.lineTo(20, 22); c.lineTo(0, 10); c.lineTo(-20, 22); c.closePath(); c.stroke();
+  c.restore();
+  xrHudTex.needsUpdate = true;
+}
+
+// ── debug hook (used by automated verification) ──────────────
+window.__ley = {
+  tp(d = 20) {
+    const to = ECHO.clone().sub(rig.position).setY(0).normalize();
+    rig.position.copy(ECHO).addScaledVector(to, -d).setY(0);
+    yaw = Math.atan2(-to.x, -to.z);
+    pitch = 0;
+  },
+  phase: () => phase,
+  dist: () => Math.hypot(ECHO.x - rig.position.x, ECHO.z - rig.position.z),
+  pos: () => rig.position.toArray()
+};
+
+// ── main loop ────────────────────────────────────────────────
+const fwd = new THREE.Vector3(), toEcho = new THREE.Vector3(), camPos = new THREE.Vector3();
+let prevT = 0, hudFrame = 0;
+
+renderer.setAnimationLoop((t) => {
+  const dt = Math.min(0.05, (t - prevT) / 1000 || 0.016);
+  prevT = t;
+  const time = t / 1000;
+  gradePass.uniforms.uTime.value = time;
+  columnMat.uniforms.uTime.value = time;
+
+  // intro: slow aerial drift, then dive to street level
+  if (phase === 'intro') {
+    if (introT < 0) {
+      yaw += dt * 0.02;
+    } else {
+      introT += dt / 3.4;
+      const k = introT >= 1 ? 1 : introT*introT*(3 - 2*introT);
+      rig.position.set(30*(1-k), 52*(1-k), 42*(1-k));
+      yaw = 0.5*(1-k);
+      pitch = -0.72*(1-k);
+      if (introT >= 1) {
+        phase = 'seek';
+        rig.position.set(0, 0, 0);
+        setHint('the band is pulsing — turn until the tempo races, then walk');
+      }
+    }
+  }
+
+  const xr = renderer.xr.isPresenting;
+
+  // movement (desktop)
+  if (!xr && (phase === 'seek' || phase === 'near')) {
+    camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+    const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+    const sp = (keys.ShiftLeft || keys.ShiftRight) ? 7 : 4;
+    let mx = 0, mz = 0;
+    if (keys.KeyW || keys.ArrowUp)    { mx += fwd.x;  mz += fwd.z; }
+    if (keys.KeyS || keys.ArrowDown)  { mx -= fwd.x;  mz -= fwd.z; }
+    if (keys.KeyA || keys.ArrowLeft)  { mx -= right.x; mz -= right.z; }
+    if (keys.KeyD || keys.ArrowRight) { mx += right.x; mz += right.z; }
+    const l = Math.hypot(mx, mz);
+    if (l > 0) {
+      tryMove(mx/l*sp*dt, mz/l*sp*dt);
+      walkPhase += dt * sp * 1.9;
+    }
+  }
+
+  // movement (XR sticks + snap turn)
+  if (xr) {
+    const s = renderer.xr.getSession();
+    snapCool = Math.max(0, snapCool - dt);
+    if (s) for (const src of s.inputSources) {
+      const gp = src.gamepad;
+      if (!gp || gp.axes.length < 4) continue;
+      const ax = gp.axes[2], ay = gp.axes[3];
+      if (src.handedness === 'left' && (Math.abs(ax) > 0.15 || Math.abs(ay) > 0.15)) {
+        const xc = renderer.xr.getCamera();
+        xc.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+        const right = new THREE.Vector3(-fwd.z, 0, fwd.x);
+        tryMove((fwd.x*-ay + right.x*ax) * 3.4 * dt, (fwd.z*-ay + right.z*ax) * 3.4 * dt);
+      }
+      if (src.handedness === 'right' && Math.abs(ax) > 0.6 && snapCool === 0) {
+        yaw -= Math.sign(ax) * Math.PI/6;
+        snapCool = 0.32;
+      }
+    }
+  }
+
+  rig.rotation.y = yaw;
+  camera.rotation.x = xr ? 0 : pitch;
+  if (!xr) camera.position.y = 1.7 + Math.sin(walkPhase) * 0.035;
+
+  // bearing / distance
+  camera.getWorldPosition(camPos);
+  camera.getWorldDirection(fwd); fwd.y = 0; fwd.normalize();
+  toEcho.copy(ECHO).sub(camPos); toEcho.y = 0;
+  const dist = toEcho.length();
+  toEcho.normalize();
+  const dot = fwd.dot(toEcho);
+  const cross = fwd.x*toEcho.z - fwd.z*toEcho.x;
+  const rel = Math.atan2(cross, dot);
+  const align = Math.pow(Math.max(0, dot), 3);
+  const prox = Math.max(0, 1 - dist/95);
+  const score = align * (0.25 + 0.75*prox);
+
+  // echo column visibility: glimpsed only when aligned, blazing when close
+  columnMat.uniforms.uOp.value = Math.max(0, 1 - dist/130) * (0.06 + 0.94*align) * (phase === 'sealed' ? 0.25 : 1);
+  echoLight.intensity = Math.max(0, 1 - dist/40) * 26;
+
+  // phase transitions
+  if (phase === 'seek' || phase === 'near') {
+    if (dist <= 4.6) enterArrive();
+    else if (dist <= 26 && phase === 'seek') {
+      phase = 'near';
+      hudwrap.classList.add('on');
+      setHint('display awake — it earned the glance');
+    } else if (dist > 30 && phase === 'near') {
+      phase = 'seek';
+      hudwrap.classList.remove('on');
+      setHint('the band is pulsing — turn until the tempo races, then walk');
+    }
+
+    dstEl.textContent = Math.round(dist) + ' m';
+    chev.style.transform = 'rotate(' + Math.round(rel * 180/Math.PI) + 'deg)';
+    const word = score < 0.08 ? 'cold' : score < 0.3 ? 'faint' : score < 0.55 ? 'warm' : score < 0.8 ? 'hot' : 'locked';
+    tempoEl.textContent = word;
+
+    const iv = Math.max(170, 1350 - 1230*score);
+    if (score > 0.05 && t - lastPulse > iv) {
+      lastPulse = t;
+      ringEl.animate([{ transform:'scale(.6)', opacity:.9 }, { transform:'scale(2.6)', opacity:0 }], { duration:500, easing:'ease-out' });
+      ring2El.animate([{ transform:'scale(.6)', opacity:.5 }, { transform:'scale(3.4)', opacity:0 }], { duration:650, easing:'ease-out' });
+      dotEl.animate([{ transform:'scale(1.6)' }, { transform:'scale(1)' }], { duration:280 });
+      tick(score);
+      if (navigator.vibrate) navigator.vibrate(Math.round(15 + 30*score));
+      if (xr) xrPulse(score);
+    }
+
+    xrHud.visible = xr && dist <= 26;
+    if (xrHud.visible && (hudFrame++ % 10 === 0)) drawXrHud(dist, rel);
+  } else {
+    xrHud.visible = false;
+  }
+
+  // handwriting reveal
+  if (revealT >= 0 && revealT < 1.35) {
+    revealT += dt / 4.6;
+    panelMat.uniforms.uReveal.value = Math.min(1, revealT);
+    if (revealT >= 1.08 && phase === 'arrive' && !replyact.classList.contains('on')) {
+      replyact.classList.add('on');
+      setHint(xr ? 'pull the trigger and write in the air — squeeze to seal' : '');
+    }
+  }
+
+  // XR air-drawing at the controller tip
+  if (xrDrawing) {
+    const p = xrDrawing.getWorldPosition(new THREE.Vector3());
+    if (!curPts.length || p.distanceTo(curPts[curPts.length-1]) > 0.01) {
+      curPts.push(p);
+      if (!curLine) { curLine = new THREE.Line(new THREE.BufferGeometry(), liveMat); scene.add(curLine); }
+      curLine.geometry.dispose();
+      curLine.geometry = new THREE.BufferGeometry().setFromPoints(curPts);
+    }
+  }
+
+  // EMG bars flutter while writing
+  if (phase === 'write') {
+    emgBars.forEach((b, i) => { b.style.height = (3 + Math.abs(Math.sin(time*9 + i*1.7)) * ((curLine||xrDrawing) ? 17 : 5)) + 'px'; });
+  }
+
+  // sealing animation: strokes collapse to the pin
+  if (phase === 'sealed') {
+    strokes.forEach(s => {
+      if (s.userData.sealT === undefined) return;
+      s.userData.sealT = Math.min(1, s.userData.sealT + dt*1.1);
+      const k = 1 - s.userData.sealT;
+      s.scale.setScalar(Math.max(0.001, k));
+      s.material.opacity = 0.95 * k;
+    });
+  }
+  if (burst) {
+    burst.t += dt;
+    const pos = burst.pts.geometry.attributes.position;
+    for (let i=0; i<burst.vel.length; i++) {
+      pos.array[i*3]   += burst.vel[i].x * dt;
+      pos.array[i*3+1] += burst.vel[i].y * dt;
+      pos.array[i*3+2] += burst.vel[i].z * dt;
+      burst.vel[i].y -= dt * 2.2;
+    }
+    pos.needsUpdate = true;
+    burst.pts.material.opacity = Math.max(0, 1 - burst.t/1.6);
+    if (burst.t > 1.7) { scene.remove(burst.pts); burst.pts.geometry.dispose(); burst = null; }
+  }
+
+  // ambience
+  neons.forEach(n => { n.mat.opacity = n.base * (0.82 + 0.18*Math.sin(time*7 + n.ph) * (Math.sin(time*23 + n.ph) > 0.92 ? 0.2 : 1)); });
+  dust.rotation.y = time * 0.008;
+  panel.visible && (frame.material.opacity = 0.4 + 0.15*Math.sin(time*2));
+
+  if (xr) renderer.render(scene, camera);
+  else composer.render();
+});
+
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  composer.setSize(innerWidth, innerHeight);
+});
+</script>
+</body>
+</html>
