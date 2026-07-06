@@ -3,7 +3,10 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>Teardown — every part knows where home is</title>
+<title>Teardown — an interactive service twin in your browser</title>
+<meta property="og:title" content="Teardown — an interactive service twin in your browser" />
+<meta property="og:description" content="A real 14-part assembly with full PBR materials that explodes, reassembles and names its parts. No install. three.js + WebXR-ready." />
+<meta name="description" content="Interactive exploded-view service twin: 14-part drill assembly, PBR materials, HDRI lighting, guided teardown demo. Built with three.js." />
 <style>
   html, body { margin:0; height:100%; overflow:hidden; background:#0b0e13; font-family:"Segoe UI", system-ui, sans-serif; color:#d8dee6; }
   canvas { display:block; }
@@ -17,6 +20,19 @@
   #tag { position:fixed; pointer-events:none; background:rgba(20,24,32,.92); border:1px solid rgba(255,180,84,.5);
          color:#ffb454; font-size:12px; letter-spacing:.06em; padding:5px 10px; border-radius:6px; display:none; transform:translate(14px, -50%); }
   #foot { position:fixed; bottom:14px; left:0; right:0; text-align:center; font-size:11px; color:#525c6b; letter-spacing:.06em; }
+  #intro { position:fixed; inset:0; display:flex; flex-direction:column; align-items:center; justify-content:center;
+           pointer-events:none; z-index:20; text-align:center; animation:introFade 4.6s ease forwards; }
+  #intro h2 { font-size:54px; font-weight:600; letter-spacing:.3em; color:#fdf3e3; margin:0 0 10px;
+              text-shadow:0 0 44px rgba(255,180,84,.8); }
+  #intro p { color:#8b94a3; letter-spacing:.24em; text-transform:uppercase; font-size:13px; margin:0; }
+  @keyframes introFade { 0%{opacity:0} 14%{opacity:1} 78%{opacity:1} 100%{opacity:0} }
+  #caption { position:fixed; bottom:64px; left:0; right:0; text-align:center; font-size:18px; color:#fdf6ec;
+             text-shadow:0 2px 14px #000, 0 0 24px rgba(255,180,84,.3); opacity:0; transition:opacity .5s; }
+  .demoBtn { margin-top:14px; width:100%; background:rgba(255,180,84,.1); border:1px solid rgba(255,180,84,.5);
+             color:#ffb454; border-radius:8px; padding:10px 16px; font-size:12px; letter-spacing:.14em;
+             text-transform:uppercase; cursor:pointer; }
+  .demoBtn:hover { background:rgba(255,180,84,.22); }
+  @media (max-width:700px) { #intro h2 { font-size:34px; } }
 </style>
 <script type="importmap">
 { "imports": {
@@ -35,11 +51,14 @@
     <label>Explode</label>
     <input id="explode" type="range" min="0" max="100" value="0" />
     <div class="chk"><input id="auto" type="checkbox" /><span>breathe (auto explode/assemble)</span></div>
+    <button class="demoBtn" id="runDemo">▶ run guided teardown</button>
     <div id="loadStatus" style="margin-top:10px;font-size:11px;color:#6b7688">loading your drill model…</div>
   </div>
 </div>
 <div id="tag"></div>
-<div id="foot">drag to orbit · scroll to zoom · hover parts for names</div>
+<div id="foot">drag to orbit · scroll to zoom · hover parts for names &nbsp;·&nbsp; three.js · WebXR-ready</div>
+<div id="intro"><h2>TEARDOWN</h2><p>interactive service twin &nbsp;·&nbsp; 14 parts &nbsp;·&nbsp; no install</p></div>
+<div id="caption"></div>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -362,6 +381,24 @@ function setHighlight(part, on) {
   });
 }
 
+// guided teardown: autopilot with captions, made for a 30–60 s screen capture
+const captionEl = document.getElementById('caption');
+const demoSteps = [
+  { until: 5,  k: 0,    cap: 'A complete 14-part assembly — live in your browser, no install.' },
+  { until: 11, k: 0.32, cap: 'The screws back themselves out first…' },
+  { until: 18, k: 0.72, cap: '…then caps, shells and bearings — the real service order.' },
+  { until: 26, k: 1,    cap: 'Fully exploded. Every part knows where home is.' },
+  { until: 33, k: 0,    cap: 'And back together. Now imagine this with your CAD data.' },
+  { until: 38, k: 0,    cap: 'Desktop · tablet · Quest (WebXR).' },
+];
+let demoT = -1, demoK = 0;
+document.getElementById('runDemo').addEventListener('click', () => {
+  demoT = 0;
+  demoK = slider.value / 100;
+  auto.checked = false;
+  controls.autoRotate = true;
+});
+
 const ease = t => t*t*(3 - 2*t);
 const clock = new THREE.Clock();
 let last = 0;
@@ -373,6 +410,19 @@ function animate() {
   last = t;
 
   if (auto.checked) slider.value = (0.5 - 0.5*Math.cos(t*0.6)) * 100;
+  if (demoT >= 0) {
+    demoT += dt;
+    const st = demoSteps.find(s => demoT < s.until);
+    if (!st) {
+      demoT = -1;
+      captionEl.style.opacity = 0;
+    } else {
+      demoK += (st.k - demoK) * 0.025;
+      slider.value = demoK * 100;
+      if (captionEl.textContent !== st.cap) captionEl.textContent = st.cap;
+      captionEl.style.opacity = 1;
+    }
+  }
   const k = slider.value / 100;
 
   // staggered teardown: screws first, then caps, shells, bearings, gears
